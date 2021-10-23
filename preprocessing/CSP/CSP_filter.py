@@ -6,6 +6,8 @@ from numpy.core.defchararray import index
 import pandas as pd
 from tqdm import tqdm
 
+from utils import constants
+
 
 def combine_motor_LR(x):
     """
@@ -104,8 +106,16 @@ class CSP:
         return np.log(var_Z / np.sum(var_Z))
 
 
-data_dir = '/shared/rsaas/nschiou2/EROS/python/'
 montages = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+
+window_mapping = {
+    'all': 'ph',
+    'rt': 'ph-rt',
+    'pre_stim': 'ph-pre-stim',
+    'init': 'ph-init',
+    'pre_rt': 'ph-pre-rt',
+    'post_rt': 'ph-post-rt'
+}
 
 
 if __name__ == '__main__':
@@ -113,19 +123,19 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--output_dir', type=str,
-                        default='/shared/rsaas/nschiou2/EROS/python')
-    parser.add_argument('--RT', action='store_true')
+                        default=os.path.join(
+                            constants.CSP_DIR, 'motor_LR'))
+    parser.add_argument('--window', type=str, default='all',
+                        help='options include all, rt, pre_stim, init, ' +
+                        'pre_rt, post_rt')
     parser.add_argument('--n_filters', type=int, default=16)
    
     args = parser.parse_args()
 
-    if args.RT:
-        df = pd.read_parquet(
-            os.path.join(data_dir,'phase_RT_filt_chan.parquet'))
-    else:
-        df = pd.read_parquet(
-            os.path.join(data_dir,'phase_all_filt_chan.parquet'))
-    
+    df = pd.read_parquet(
+        os.path.join(constants.PHASE_DATA_DIR,
+                     f'phase_{args.window}_filt_chan.parquet'))
+
     subjects = df['subject_id'].unique()
     transformed_df = pd.DataFrame()
 
@@ -134,7 +144,9 @@ if __name__ == '__main__':
         
             subset = df[(df['subject_id'] == str(subject_id)) & \
                         (df['montage'] == montage)].copy()  
-            feat_cols = np.array([c for c in subset.columns if 'ph_' in c])
+            feat_cols = np.array(
+                [c for c in subset.columns if window_mapping[args.window] in c]
+                )
             label_col = 'trial_type'
 
             # Drop all channels that have NaN (not viable) since CSP
@@ -148,7 +160,9 @@ if __name__ == '__main__':
                 axis=0, subset=['label']).copy().reset_index(drop=True)
 
             # Re-define viable feature channels
-            feat_cols = np.array([c for c in subset.columns if 'ph_' in c])
+            feat_cols = np.array(
+                [c for c in subset.columns if window_mapping[args.window] in c]
+                )
             label_col = 'label'
 
             # (trials x feats x timepoints)
@@ -185,11 +199,7 @@ if __name__ == '__main__':
             transformed_df = transformed_df.append(intermediate_df,
                                                    ignore_index=True)
     
-    if args.RT:
-        transformed_df.to_parquet(
-            os.path.join(data_dir, f'CSP_filt_{args.n_filters}_RT.parquet'),
-            index=False)
-    else:
-        transformed_df.to_parquet(
-            os.path.join(data_dir, f'CSP_filt_{args.n_filters}_all.parquet'),
-            index=False)
+    transformed_df.to_parquet(
+        os.path.join(constants.CSP_DIR, 'motor_LR',
+                     f'CSP_filt_{args.n_filters}_{args.window}.parquet'),
+        index=False)
