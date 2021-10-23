@@ -1,0 +1,13 @@
+Executable   = batch_jobs/train_baseline_csp.sh
+Log          = batch_jobs/logs/train_baseline_csp.log
+Output       = batch_jobs/logs/train_baseline_csp.stdout
+Error        = batch_jobs/logs/train_baseline_csp.stderr
+notify_user  = nschiou2@illinois.edu
+notification = Always
+getenv       = True
+
+Request_gpus = 0
+Request_cpus = 8
+Request_memory =200G
+requirements = (CUDADeviceName != "Tesla K40m")
+Queue
