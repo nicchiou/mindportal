@@ -1,7 +1,7 @@
 import argparse
+import copy
 import json
 import os
-import copy
 
 import numpy as np
 import pandas as pd
@@ -9,11 +9,11 @@ from sklearn import svm
 from sklearn.decomposition import PCA
 from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
 from sklearn.feature_selection import SelectFromModel, mutual_info_classif
-from sklearn.metrics import (accuracy_score, f1_score, precision_score,
-                             recall_score)
-from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
+from utils import constants
 
 
 def combine_motor_LR(x):
@@ -26,6 +26,31 @@ def combine_motor_LR(x):
         return 0
     elif x in [1, 3, 5, 7]:
         return 1
+    else:
+        return np.nan
+
+
+def stim_modality_motor_LR_labels(x):
+    """
+    Combines trial types such that the problem is a multi-class classification
+    problem with the goal to predict both the stimulus modality (visual or
+    auditory) as well as the motor response (L/R).
+
+    0: visual, right
+    1: visual, left
+    2: auditory, right
+    3: auditory, left
+
+    Returns np.nan for unsupported trial types.
+    """
+    if x in [1, 5]:
+        return 0
+    elif x in [2, 6]:
+        return 1
+    elif x in [3, 7]:
+        return 2
+    elif x in [4, 8]:
+        return 3
     else:
         return np.nan
 
@@ -56,32 +81,38 @@ def train_eval_clf(args, X_train, y_train, X_valid, y_valid, X_test, y_test):
     clf.fit(X_train, y_train)
 
     trial_results = dict()
+
     y_pred = clf.predict(X_train)
-    trial_results['Train Accuracy'] = accuracy_score(y_train, y_pred)
-    trial_results['Train Precision'] = precision_score(y_train, y_pred,
-        zero_division=0)
-    trial_results['Train Recall'] = recall_score(y_train, y_pred,
-        zero_division=0)
-    trial_results['Train F1'] = f1_score(y_train, y_pred, zero_division=0)
+    class_rep = classification_report(y_train, y_pred, output_dict=True,
+                                      zero_division='warn')
+    trial_results['Train Accuracy'] = class_rep['accuracy']
+    trial_results['Train Precision'] = class_rep['macro avg']['precision']
+    trial_results['Train Recall'] = class_rep['macro avg']['recall']
+    trial_results['Train F1'] = class_rep['macro avg']['f1-score']
+
     y_pred = clf.predict(X_valid)
-    trial_results['Valid Accuracy'] = accuracy_score(y_valid, y_pred)
-    trial_results['Valid Precision'] = precision_score(y_valid, y_pred,
-        zero_division=0)
-    trial_results['Valid Recall'] = recall_score(y_valid, y_pred,
-        zero_division=0)
-    trial_results['Valid F1'] = f1_score(y_valid, y_pred, zero_division=0)
+    class_rep = classification_report(y_valid, y_pred, output_dict=True,
+                                      zero_division='warn')
+    trial_results['Valid Accuracy'] = class_rep['accuracy']
+    trial_results['Valid Precision'] = class_rep['macro avg']['precision']
+    trial_results['Valid Recall'] = class_rep['macro avg']['recall']
+    trial_results['Valid F1'] = class_rep['macro avg']['f1-score']
+
     y_pred = clf.predict(X_test)
-    trial_results['Test Accuracy'] = accuracy_score(y_test, y_pred)
-    trial_results['Test Precision'] = precision_score(y_test, y_pred,
-        zero_division=0)
-    trial_results['Test Recall'] = recall_score(y_test, y_pred,
-        zero_division=0)
-    trial_results['Test F1'] = f1_score(y_test, y_pred, zero_division=0)
+    class_rep = classification_report(y_test, y_pred, output_dict=True,
+                                      zero_division='warn')
+    trial_results['Test Accuracy'] = class_rep['accuracy']
+    trial_results['Test Precision'] = class_rep['macro avg']['precision']
+    trial_results['Test Recall'] = class_rep['macro avg']['recall']
+    trial_results['Test F1'] = class_rep['macro avg']['f1-score']
+    for label in np.unique(y_test):
+        for k, v in class_rep[str(label)].items():
+            trial_results[f'{int(label)} {k}'] = v
+    trial_results['cfmat'] = confusion_matrix(y_test, y_pred).flatten()
 
     return trial_results
 
 
-data_dir = '/shared/rsaas/nschiou2/EROS/python/'
 montages = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 
 
@@ -89,17 +120,21 @@ if __name__ == '__main__':
     
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--exp_dir', type=str, default='linear_svm')
+    parser.add_argument('--exp_dir', type=str, required=True)
     parser.add_argument('--clf_type', type=str, default='SVM',
                         help='options are: SVM, RF')
     parser.add_argument('--log_variance_feats', action='store_true',
-                        help='indicates whether to use CSP-derived ' +
+                        help='indicates whether to use CSP-derived ' \
                         'log-variance features instead of band-power features')
-    parser.add_argument('--RT', action='store_true',
-                        help='use RT window signal')
+    parser.add_argument('--window', type=str, default='all',
+                        help='options include all, rt, pre_stim, init, ' \
+                        'pre_rt, post_rt')
     parser.add_argument('--n_filters', type=int, default=16,
                         help='number of CSP filters used to generate features')
-    parser.add_argument('--selection_method', type=str, default=None,
+    parser.add_argument('--classification_type', type=str, default='motor_LR',
+                        help='options include motor_LR (motor response) and ' \
+                        'stim_motor_LR (stimulus modality and motor response')
+    parser.add_argument('--selection_method', type=str, default='None',
                         help='options are: PCA, MI, tree, linear, None')
     parser.add_argument('--selected_dir', type=str)
     parser.add_argument('--n_components', type=int, default=100,
@@ -123,40 +158,25 @@ if __name__ == '__main__':
     parser.add_argument('--n_splits', type=int, default=5, help='cv splits')
 
     args = parser.parse_args()
-    exp_dir = os.path.join('../experiments', args.exp_dir)
+    model_name = 'linear_svm' if args.clf_type == 'SVM' else 'random_forest'
+    exp_dir = os.path.join(constants.RESULTS_DIR, args.classification_type,
+                           'csp_baseline', model_name, args.exp_dir)
     os.makedirs(exp_dir, exist_ok=True)
     with open(os.path.join(exp_dir, 'args.json'), 'w') as f:
         json.dump(args.__dict__, f, indent=4)
     
-    # Try to append to existing DataFrame of results
-    try:
-        results_df = pd.read_parquet(
-            os.path.join(exp_dir, f'{args.selection_method}_results.parquet'))
-    except OSError:
-        results_df = pd.DataFrame()
+    results_df = pd.DataFrame()
 
     # Input features (not yet selected)
     if args.log_variance_feats:
-        if args.RT:
-            df = pd.read_parquet(
-                os.path.join(
-                    data_dir, f'CSP_filt_{args.n_filters}_RT.parquet'))
-        else:
-            df = pd.read_parquet(
-                os.path.join(
-                    data_dir, f'CSP_filt_{args.n_filters}_all.parquet'))
+        df = pd.read_parquet(
+            os.path.join(constants.CSP_DIR, args.classification_type,
+                         f'CSP_filt_{args.n_filters}_{args.window}.parquet'))
     else:
-        if args.RT:
-            df = pd.read_parquet(
-                os.path.join(
-                    data_dir,
-                    f'simple_bandpower_features_csp_{args.n_filters}_rt.parquet'))
-        else:
-            df = pd.read_parquet(
-                os.path.join(
-                    data_dir,
-                    f'simple_bandpower_features_csp_{args.n_filters}_all.parquet'))
-        
+        df = pd.read_parquet(os.path.join(
+            constants.BANDPOWER_DIR,
+            f'simple_bandpower_features_csp_{args.n_filters}_{args.window}.parquet'))
+   
     subjects = df['subject_id'].unique()
 
     for subject_id in tqdm(subjects):
@@ -175,8 +195,12 @@ if __name__ == '__main__':
 
             # Combine trial types
             if not args.log_variance_feats:
-                subset.loc[:, 'label'] = subset.loc[:, 'trial_type'].apply(
-                    combine_motor_LR)
+                if args.classification_type == 'motor_LR':
+                    subset.loc[:, 'label'] = subset.loc[:, 'trial_type'].apply(
+                        combine_motor_LR)
+                elif args.classification_type == 'stim_motor_LR':
+                    subset.loc[:, 'label'] = subset.loc[:, 'trial_type'].apply(
+                        stim_modality_motor_LR_labels)
                 subset = subset.dropna(
                     axis=0, subset=['label']).copy().reset_index(drop=True)
 
@@ -243,7 +267,7 @@ if __name__ == '__main__':
                     X_valid = selector.transform(X_valid)
                     X_test = selector.transform(X_test)
                     trial_results['n_features'] = X_train.shape[1]
-                elif args.selection_method is None:
+                elif args.selection_method == 'None':
                     trial_results['n_features'] = X_train.shape[1]
                 else:
                     raise NotImplementedError(

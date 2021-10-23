@@ -1,3 +1,4 @@
+from datetime import MINYEAR
 import os
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -12,3 +13,5 @@ ALL_SIGNAL_DIR = os.path.join(PYTHON_DIR, 'ac_dc_ph')
 PHASE_DATA_DIR = os.path.join(PYTHON_DIR, 'phase_data')
 BANDPOWER_DIR = os.path.join(PYTHON_DIR, 'bandpower_features')
 CSP_DIR = os.path.join(PYTHON_DIR, 'csp_transform')
+
+RESULTS_DIR = os.path.join(SHARED_DIR, 'mindportal')
