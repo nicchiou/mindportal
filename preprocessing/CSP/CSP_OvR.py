@@ -34,6 +34,44 @@ def stim_modality_motor_LR_labels(x):
         return np.nan
 
 
+def response_stim_modality_labels(x):
+    """
+    Combines trial types such that the problem is a multi-class classification
+    problem with the goal to predict the response modality (motor or vocal),
+    the stimulus modality (visual or auditory) as well as the response
+    polarity (L/R).
+
+    0: motor, visual, right
+    1: motor, visual, left
+    2: motor, auditory, right
+    3: motor, auditory, left
+    4: vocal, visual, right
+    5: vocal, visual, left
+    6: vocal, auditory, right
+    7: vocal, auditory, left
+
+    Returns np.nan for unsupported trial types.
+    """
+    if x in [1, 5]:
+        return 0
+    elif x in [2, 6]:
+        return 1
+    elif x in [3, 7]:
+        return 2
+    elif x in [4, 8]:
+        return 3
+    elif x in [9, 13]:
+        return 4
+    elif x in [10, 14]:
+        return 5
+    elif x in [11, 15]:
+        return 6
+    elif x in [12, 16]:
+        return 7
+    else:
+        return np.nan
+
+
 class CSP:
     def __init__(self, X_i, X_j, n_filters=16):
         """
@@ -119,33 +157,44 @@ class CSP:
 
 montages = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 
-window_mapping = {
-    'all': 'ph',
-    'rt': 'ph-rt',
-    'pre_stim': 'ph-pre-stim',
-    'init': 'ph-init',
-    'pre_rt': 'ph-pre-rt',
-    'post_rt': 'ph-post-rt'
-}
-
 
 if __name__ == '__main__':
     
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--output_dir', type=str,
-                        default=os.path.join(
-                            constants.CSP_DIR, 'stim_motor_LR'))
+                        default=os.path.join(constants.CSP_DIR, 'motor_LR'))
+    parser.add_argument('--anchor', type=str, default='pc',
+                        help='pre-cue (pc) or response stimulus (rs)')
+    parser.add_argument('--unfilt', action='store_true')
     parser.add_argument('--window', type=str, default='all',
-                        help='options include all, rt, pre_stim, init, ' +
-                        'pre_rt, post_rt')
+                        help='options include 0-7')
     parser.add_argument('--n_filters', type=int, default=16)
+    parser.add_argument('--classification_task', type=str,
+                        default='stim_motor',
+                        help='options include stim_motor (stimulus modality '
+                        'and motor response) or response_stim (response '
+                        'modality, stimulus modality, and response polarity).')
    
     args = parser.parse_args()
 
-    df = pd.read_parquet(
-        os.path.join(constants.PHASE_DATA_DIR,
-                     f'phase_{args.window}_filt_chan.parquet'))
+    in_dir = os.path.join(constants.PHASE_DATA_DIR, args.anchor)
+    if args.unfilt:
+        if args.window == 'all':
+            fname = f'phase_all_single_trial.parquet'
+        else:
+            fname = f'phase_win{args.window}_single_trial.parquet'
+    else:
+        if args.window == 'all':
+            fname = f'phase_all_filt_chan.parquet'
+        else:
+            fname = f'phase_win{args.window}_filt_chan.parquet'
+    df = pd.read_parquet(os.path.join(in_dir, fname))
+
+    out_dir = os.path.join(constants.CSP_DIR, args.classification_task,
+                           args.anchor, 'unfilt' if args.unfilt else 'filt')
+    os.makedirs(out_dir, exist_ok=True)
+    classes = 4 if args.classification_task == 'stim_motor' else 8
 
     subjects = df['subject_id'].unique()
     transformed_df = pd.DataFrame()
@@ -155,9 +204,12 @@ if __name__ == '__main__':
         
             subset = df[(df['subject_id'] == str(subject_id)) & \
                         (df['montage'] == montage)].copy()  
-            feat_cols = np.array(
-                [c for c in subset.columns if window_mapping[args.window] in c]
-                )
+            if args.window == 'all':
+                feat_cols = np.array(
+                    [c for c in subset.columns if 'ph_' in c])
+            else:
+                feat_cols = np.array(
+                    [c for c in subset.columns if f'ph_win{args.window}' in c])
             label_col = 'trial_type'
 
             # Drop all channels that have NaN (not viable) since CSP
@@ -165,16 +217,26 @@ if __name__ == '__main__':
             subset = subset.dropna(axis=1).reset_index(drop=True)
 
             # Combine trial types
-            # (focus on stimulus modality and motor response)
-            subset.loc[:, 'label'] = subset.loc[:, 'trial_type'].apply(
-                stim_modality_motor_LR_labels)
+            # Classify stimulus modality and motor response
+            if args.classification_task == 'stim_motor':
+                func = stim_modality_motor_LR_labels
+            # Classify response modality, stimulus modality, and response
+            # polarity
+            elif args.classification_task == 'response_stim':
+                func = response_stim_modality_labels
+            else:
+                raise NotImplementedError('Classification type not supported')
+            subset.loc[:, 'label'] = subset.loc[:, 'trial_type'].apply(func)
             subset = subset.dropna(
                 axis=0, subset=['label']).copy().reset_index(drop=True)
 
             # Re-define viable feature channels
-            feat_cols = np.array(
-                [c for c in subset.columns if window_mapping[args.window] in c]
-                )
+            if args.window == 'all':
+                feat_cols = np.array(
+                    [c for c in subset.columns if 'ph_' in c])
+            else:
+                feat_cols = np.array(
+                    [c for c in subset.columns if f'ph_win{args.window}' in c])
             label_col = 'label'
 
             # (trials x feats x timepoints)
@@ -190,7 +252,7 @@ if __name__ == '__main__':
                 [c for c in subset.columns if c not in feat_cols]].copy()
 
             # One-versus-rest setting
-            for tt in tqdm([0, 1, 2, 3], leave=False):
+            for tt in tqdm(range(classes), leave=False):
 
                 # Isolate trials by class (trial type)
                 X_j = X[np.argwhere(y == tt).flatten()].copy()
@@ -218,7 +280,8 @@ if __name__ == '__main__':
             transformed_df = transformed_df.append(intermediate_df,
                                                    ignore_index=True)
     
-    transformed_df.to_parquet(
-        os.path.join(constants.CSP_DIR, 'stim_motor_LR',
-                     f'CSP_filt_{args.n_filters}_{args.window}.parquet'),
-        index=False)
+    if args.window == 'all':
+        fname = f'CSP_filt_{args.n_filters}_all.parquet'
+    else:
+        fname = f'CSP_filt_{args.n_filters}_win{args.window}.parquet' 
+    transformed_df.to_parquet(os.path.join(out_dir, fname), index=False)

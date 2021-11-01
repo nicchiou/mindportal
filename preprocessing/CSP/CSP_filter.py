@@ -108,33 +108,38 @@ class CSP:
 
 montages = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 
-window_mapping = {
-    'all': 'ph',
-    'rt': 'ph-rt',
-    'pre_stim': 'ph-pre-stim',
-    'init': 'ph-init',
-    'pre_rt': 'ph-pre-rt',
-    'post_rt': 'ph-post-rt'
-}
-
 
 if __name__ == '__main__':
     
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--output_dir', type=str,
-                        default=os.path.join(
-                            constants.CSP_DIR, 'motor_LR'))
+                        default=os.path.join(constants.CSP_DIR, 'motor_LR'))
+    parser.add_argument('--anchor', type=str, default='pc',
+                        help='pre-cue (pc) or response stimulus (rs)')
+    parser.add_argument('--unfilt', action='store_true')
     parser.add_argument('--window', type=str, default='all',
-                        help='options include all, rt, pre_stim, init, ' +
-                        'pre_rt, post_rt')
+                        help='options include 0-7')
     parser.add_argument('--n_filters', type=int, default=16)
    
     args = parser.parse_args()
 
-    df = pd.read_parquet(
-        os.path.join(constants.PHASE_DATA_DIR,
-                     f'phase_{args.window}_filt_chan.parquet'))
+    in_dir = os.path.join(constants.PHASE_DATA_DIR, args.anchor)
+    if args.unfilt:
+        if args.window == 'all':
+            fname = f'phase_all_single_trial.parquet'
+        else:
+            fname = f'phase_win{args.window}_single_trial.parquet'
+    else:
+        if args.window == 'all':
+            fname = f'phase_all_filt_chan.parquet'
+        else:
+            fname = f'phase_win{args.window}_filt_chan.parquet'
+    df = pd.read_parquet(os.path.join(in_dir, fname))
+
+    out_dir = os.path.join(constants.CSP_DIR, 'motor_LR', args.anchor,
+                           'unfilt' if args.unfilt else 'filt')
+    os.makedirs(out_dir, exist_ok=True)
 
     subjects = df['subject_id'].unique()
     transformed_df = pd.DataFrame()
@@ -143,10 +148,13 @@ if __name__ == '__main__':
         for montage in tqdm(montages, leave=False):
         
             subset = df[(df['subject_id'] == str(subject_id)) & \
-                        (df['montage'] == montage)].copy()  
-            feat_cols = np.array(
-                [c for c in subset.columns if window_mapping[args.window] in c]
-                )
+                        (df['montage'] == montage)].copy()
+            if args.window == 'all':
+                feat_cols = np.array(
+                    [c for c in subset.columns if 'ph_' in c])
+            else:
+                feat_cols = np.array(
+                    [c for c in subset.columns if f'ph_win{args.window}' in c])
             label_col = 'trial_type'
 
             # Drop all channels that have NaN (not viable) since CSP
@@ -160,9 +168,12 @@ if __name__ == '__main__':
                 axis=0, subset=['label']).copy().reset_index(drop=True)
 
             # Re-define viable feature channels
-            feat_cols = np.array(
-                [c for c in subset.columns if window_mapping[args.window] in c]
-                )
+            if args.window == 'all':
+                feat_cols = np.array(
+                    [c for c in subset.columns if 'ph_' in c])
+            else:
+                feat_cols = np.array(
+                    [c for c in subset.columns if f'ph_win{args.window}' in c])
             label_col = 'label'
 
             # (trials x feats x timepoints)
@@ -199,7 +210,8 @@ if __name__ == '__main__':
             transformed_df = transformed_df.append(intermediate_df,
                                                    ignore_index=True)
     
-    transformed_df.to_parquet(
-        os.path.join(constants.CSP_DIR, 'motor_LR',
-                     f'CSP_filt_{args.n_filters}_{args.window}.parquet'),
-        index=False)
+    if args.window == 'all':
+        fname = f'CSP_filt_{args.n_filters}_all.parquet'
+    else:
+        fname = f'CSP_filt_{args.n_filters}_win{args.window}.parquet' 
+    transformed_df.to_parquet(os.path.join(out_dir, fname), index=False)
