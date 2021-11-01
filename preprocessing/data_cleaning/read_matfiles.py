@@ -17,9 +17,9 @@ from utils import constants
 ############################################################################### 
 
 baseline_dirs = [
-    'pc00-04baseline',
-    'pc00-08baseline',
-    'pc00-13baseline'
+    'pc00-04avg',
+    'pc00-08avg',
+    'pc00-13avg'
 ]
 
 
@@ -33,6 +33,8 @@ if __name__ == '__main__':
                         help='pre-cue (pc) or response stimulus (rs)')
    
     args = parser.parse_args()
+
+    baseline_dirs = [f'{d}_{args.anchor}' for d in baseline_dirs]
 
     df = pd.DataFrame()
 
