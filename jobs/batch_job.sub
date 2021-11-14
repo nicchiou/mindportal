@@ -1,0 +1,13 @@
+Executable   = jobs/test.sh
+Log          = jobs/logs/test.log
+Output       = jobs/logs/test.stdout
+Error        = jobs/logs/test.stderr
+notify_user  = nschiou2@illinois.edu
+notification = Always
+getenv       = True
+
+Request_gpus = 1
+Request_cpus = 4
+Request_memory = 300G
+requirements = (CUDADeviceName != "NVIDIA GeForce GTX TITAN X") && (CUDADeviceName != "Quadro RTX 6000") && (CUDADeviceName != "Tesla K40m") && (CUDADeviceName != "NVIDIA A40")
+Queue
