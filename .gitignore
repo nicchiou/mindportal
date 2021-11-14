@@ -3,4 +3,6 @@
 *.egg-info/
 
 interactive.sub
-logs/
+jobs/*
+!jobs/starter_scripts/
+!jobs/batch_job.sub
