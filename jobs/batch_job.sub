@@ -1,12 +1,12 @@
-Executable   = jobs/test.sh
-Log          = jobs/logs/test.log
-Output       = jobs/logs/test.stdout
-Error        = jobs/logs/test.stderr
+Executable   = jobs/filter_zeros_04_pc.sh
+Log          = jobs/logs/filter_zeros_04_pc.log
+Output       = jobs/logs/filter_zeros_04_pc.stdout
+Error        = jobs/logs/filter_zeros_04_pc.stderr
 notify_user  = nschiou2@illinois.edu
 notification = Always
 getenv       = True
 
-Request_gpus = 1
+Request_gpus = 0
 Request_cpus = 4
 Request_memory = 300G
 requirements = (CUDADeviceName != "NVIDIA GeForce GTX TITAN X") && (CUDADeviceName != "Quadro RTX 6000") && (CUDADeviceName != "Tesla K40m") && (CUDADeviceName != "NVIDIA A40")
