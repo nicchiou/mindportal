@@ -89,8 +89,14 @@ if __name__ == '__main__':
                         help='options are: SVM, RBF_SVM, RF')
     parser.add_argument('--window', type=str, default='all',
                         help='options include 0-7')
-    parser.add_argument('--unfilt', action='store_true')
-    parser.add_argument('--csp', action='store_true')
+    parser.add_argument('--unfilt', action='store_true',
+                        help='indicates whether to use data without the '
+                        'removal of zeroed channels')
+    parser.add_argument('--csp', action='store_true',
+                        help='indicates whether to use CSP filtering')
+    parser.add_argument('--bandpass_only', action='store_true',
+                        help='indicates whether to use the signal that has '
+                        'not been rectified nor low-pass filtered')
     parser.add_argument('--log_variance_feats', action='store_true',
                         help='indicates whether to use CSP-derived '
                         'log-variance features instead of band-power features')
@@ -135,9 +141,12 @@ if __name__ == '__main__':
         model_name = 'rbf_svm'
     else:
         model_name = 'random_forest'
-    exp_dir = os.path.join(constants.RESULTS_DIR, args.classification_task,
-                           'csp_baseline' if args.csp else 'baseline',
-                           model_name, args.anchor, args.exp_dir)
+    exp_dir = os.path.join(
+        constants.RESULTS_DIR, args.classification_task,
+        'csp_baseline' if args.csp else 'baseline',
+        model_name, args.anchor,
+        'bandpass_only' if args.bandpass_only else 'rect_lowpass',
+        args.exp_dir)
     os.makedirs(exp_dir, exist_ok=True)
     with open(os.path.join(exp_dir, 'args.json'), 'w') as f:
         json.dump(args.__dict__, f, indent=4)
@@ -146,7 +155,9 @@ if __name__ == '__main__':
 
     # Input file (if csp, contains signals; else, contains features)
     if args.csp:
-        in_dir = os.path.join(constants.PHASE_DATA_DIR, args.anchor)
+        in_dir = os.path.join(
+            constants.PHASE_DATA_DIR, args.anchor,
+            'bandpass_only' if args.bandpass_only else 'rect_lowpass')
         if args.unfilt:
             if args.window == 'all':
                 fname = 'phase_all_single_trial.parquet'
@@ -158,7 +169,9 @@ if __name__ == '__main__':
             else:
                 fname = f'phase_win{args.window}_filt_chan.parquet'
     else:
-        in_dir = os.path.join(constants.BANDPOWER_DIR, args.anchor)
+        in_dir = os.path.join(
+            constants.BANDPOWER_DIR, args.anchor,
+            'bandpass_only' if args.bandpass_only else 'rect_lowpass')
         if args.window == 'all':
             fname = 'all_simple_bandpower_features.parquet'
         else:
