@@ -25,9 +25,9 @@ if __name__ == '__main__':
                         default=os.path.join(constants.PYTHON_DIR, 'ac_dc_ph'))
     parser.add_argument('--anchor', type=str, default='pc',
                         help='pre-cue (pc) or response stimulus (rs)')
-    parser.add_argument('--lowpass', action='store_true',
-                        help='flag indicates whether signal was previously '
-                        'passed through a lowpass filter')
+    parser.add_argument('--bandpass_only', action='store_true',
+                        help='indicates whether to use the signal that has '
+                        'not been rectified nor low-pass filtered')
     parser.add_argument('-l', '--input_dirs', nargs='+',
                         default=['pc00-04avg', 'pc00-08avg', 'pc00-13avg'],
                         help='directories to process from')
@@ -38,7 +38,10 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     baseline_dirs = [f'{d}_{args.anchor}' for d in args.input_dirs]
-    os.makedirs(os.path.join(args.output_dir, args.anchor), exist_ok=True)
+    os.makedirs(os.path.join(
+        args.output_dir, args.anchor,
+        'bandpass_only' if args.bandpass_only else 'rect_lowpass'),
+        exist_ok=True)
 
     df = pd.DataFrame()
 
@@ -171,15 +174,16 @@ if __name__ == '__main__':
             if args.save_subject_ts:
                 out_dir = os.path.join(
                     constants.SUBJECTS_DIR, args.anchor,
-                    'bandpass_only' if not args.lowpass else 'rect_lowpass')
+                    'bandpass_only' if args.bandpass_only else 'rect_lowpass')
                 os.makedirs(out_dir, exist_ok=True)
-                suffix = freq_band[-2:] if args.lowpass else freq_band[:2]
+                suffix = freq_band[:2] if args.bandpass_only \
+                    else freq_band[-2:]
                 all_ph_signals.to_parquet(os.path.join(
                     out_dir,
                     f'{subject_id}_{montage}_{int(suffix)}.parquet'),
                     index=False)
 
-        df_freq.to_parquet(
-            os.path.join(
-                args.output_dir, args.anchor, f'{d}_all_single_trial.parquet'),
-            index=False)
+        df_freq.to_parquet(os.path.join(
+            args.output_dir, args.anchor,
+            'bandpass_only' if args.bandpass_only else 'rect_lowpass',
+            f'{d}_all_single_trial.parquet'), index=False)

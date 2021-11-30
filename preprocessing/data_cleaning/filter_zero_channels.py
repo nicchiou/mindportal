@@ -24,7 +24,9 @@ if __name__ == '__main__':
                         default=os.path.join(constants.PYTHON_DIR, 'ac_dc_ph'))
     parser.add_argument('--anchor', type=str, default='pc',
                         help='pre-cue (pc) or response stimulus (rs)')
-    parser.add_argument('--bandpass_only', action='store_true')
+    parser.add_argument('--bandpass_only', action='store_true',
+                        help='indicates whether to use the signal that has '
+                        'not been rectified nor low-pass filtered')
     parser.add_argument('-l', '--input_dirs', nargs='+',
                         default=['pc00-04avg', 'pc00-08avg', 'pc00-13avg'],
                         help='directories to process from')
@@ -107,7 +109,7 @@ if __name__ == '__main__':
             # Utilize only the full signal
             ph_all = ph_data[
                 [c for c in ph_data.columns
-                 if len(c.split('_')) == 4 and 'ph_' in c]
+                 if len(c.split('_')) == 4 and 'ph_' in c] +
                 ['trial_num', 'subject_id', 'trial_type', 'montage']]
             ph_all.to_parquet(
                 os.path.join(data_dir, 'phase_all_single_trial.parquet'),
@@ -116,7 +118,7 @@ if __name__ == '__main__':
             # Filter windows of 500 ms
             for i in tqdm(range(8)):
                 ph_win = ph_data[
-                    [c for c in ph_data.columns if f'win{i}' in c]
+                    [c for c in ph_data.columns if f'win{i}' in c] +
                     ['trial_num', 'subject_id', 'trial_type', 'montage']]
                 ph_win.to_parquet(
                     os.path.join(data_dir,
