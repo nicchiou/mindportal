@@ -37,8 +37,12 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
 
         # Set up Datasets and DataLoaders
         data = SubjectMontageData(
-            os.path.join(args.data_path, args.anchor), subject, montage,
-            args.classification_task, args.filter_zeros, args.average_chan)
+            os.path.join(
+                args.data_path, args.anchor,
+                'bandpass_only' if args.bandpass_only else 'rect_lowpass'),
+            subject, montage,
+            args.classification_task, args.filter_zeros, args.average_chan,
+            args.max_abs_scale)
         train_dataset = SubjectMontageDataset(data=data, subset='train',
                                               stratified=args.stratified,
                                               seed=args.train_seed)
@@ -136,8 +140,8 @@ def train(subject: str, montage: str,
     best_valid_metrics = dict()
     best_valid_metrics['loss'] = -1
     best_valid_metrics['accuracy'] = -1
-    best_valid_metrics['sensitivity'] = -1
-    best_valid_metrics['specificity'] = -1
+    best_valid_metrics['precision'] = -1
+    best_valid_metrics['recall'] = -1
     best_valid_metrics['f1'] = -1
     best_valid_metrics['auc'] = -1
     best_valid_loss = 1e6
@@ -624,11 +628,15 @@ if __name__ == '__main__':
                         'modality, and response polarity).')
     parser.add_argument('--anchor', type=str, default='pc',
                         help='pre-cue (pc) or response stimulus (rs)')
+    parser.add_argument('--bandpass_only', action='store_true',
+                        help='indicates whether to use the signal that has '
+                        'not been rectified nor low-pass filtered')
     parser.add_argument('--filter_zeros', action='store_true',
                         help='Removes channels with all zeros from input.')
     parser.add_argument('--average_chan', action='store_true',
                         help='Average all input channels for each frequency '
                         'band before input into model.')
+    parser.add_argument('--max_abs_scale', action='store_true')
     parser.add_argument('--use_attention', action='store_true',
                         help='Use attention mechanisms for classification')
     parser.add_argument('--attention_type', type=str,
@@ -705,9 +713,12 @@ if __name__ == '__main__':
     mpl.setLevel(logging.INFO)
 
     # Make experimental directories for output
-    exp_dir = os.path.join(constants.RESULTS_DIR,
-                           args.classification_task, 'chan_avg_rnn',
-                           args.anchor, args.metric, args.expt_name)
+    exp_dir = os.path.join(
+        constants.RESULTS_DIR, args.classification_task, 'chan_avg_rnn',
+        args.anchor,
+        'bandpass_only' if args.bandpass_only else 'rect_lowpass',
+        'max_abs_scale' if args.max_abs_scale else 'no_scale',
+        args.arch, args.expt_name)
     os.makedirs(exp_dir, exist_ok=True)
     os.makedirs(os.path.join(exp_dir, 'checkpoints'), exist_ok=True)
 
@@ -737,7 +748,7 @@ if __name__ == '__main__':
             'Use selection_cv.py')
 
     # Set up processes
-    gpus = [i // 3 for i in range(3 * torch.cuda.device_count())]
+    gpus = [i // 4 for i in range(4 * torch.cuda.device_count())]
     proclist = [multiprocessing.Process(
         target=internal_model_runner,
         args=(i, args, exp_dir, input_queue, results_queue)) for i in gpus]
