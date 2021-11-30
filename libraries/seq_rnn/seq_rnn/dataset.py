@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import torch
 from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.preprocessing import maxabs_scale
 from torch.utils.data import Dataset
 from utils import combine_trial_types
 
@@ -23,7 +24,7 @@ class SubjectMontageData(EROSData):
     """
     def __init__(self, data_dir: str, subject: str, montage: str,
                  classification_task: str,
-                 filter_zeros: bool, average_chan: bool):
+                 filter_zeros: bool, average_chan: bool, max_abs_scale: bool):
 
         self.data_dir = data_dir
 
@@ -87,6 +88,9 @@ class SubjectMontageData(EROSData):
             data = dynamic_trial_data[
                 [c for c in dynamic_trial_data.columns if c != 'trial_num']
                 ].values.astype(np.float32)
+            # Maximum absolute value scaling
+            if max_abs_scale:
+                data = maxabs_scale(data, axis=0)
             data = [row for row in data]
             self.dynamic_data.append(data)
 
