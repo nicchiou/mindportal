@@ -7,7 +7,8 @@ import torch
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import maxabs_scale
 from torch.utils.data import Dataset
-from utils import combine_trial_types
+
+from utils import combine_trial_types, constants
 
 
 class EROSData:
@@ -56,9 +57,11 @@ class SubjectMontageData(EROSData):
         chan_cols = [c for c in self.data.columns if 'ph_' in c]
         self.meta_data = self.data.loc[:, meta_cols]
         self.dynamic_table = self.data.loc[:, chan_cols + ['trial_num']]
-        self.labels = self.data.groupby('trial_num').mean()['trial_type']
+        self.labels = self.data.groupby('trial_num').mean().reset_index()[
+            ['trial_num', 'trial_type']]
         self.labels.index.name = None
-        self.labels = pd.DataFrame(self.labels, columns=['trial_type'])
+        self.labels = pd.DataFrame(self.labels,
+                                   columns=['trial_num', 'trial_type'])
 
         # Filter channels with all zeros
         if filter_zeros:
@@ -76,23 +79,6 @@ class SubjectMontageData(EROSData):
                 ].mean(axis=1)
             self.dynamic_table = self.dynamic_table.loc[
                 :, ['avg_04', 'avg_08', 'avg_13'] + ['trial_num']]
-
-        # Use dynamic_data to store a list of each trial's signal, where each
-        # element of the list is a list of 1D numpy arrays where each array
-        # represents a single recording data point.
-        self.trial_id = self.meta_data['trial_num'].unique()
-        self.dynamic_data = []
-        for trial in self.trial_id:
-            dynamic_trial_data = self.dynamic_table.loc[
-                self.dynamic_table['trial_num'] == trial, :]
-            data = dynamic_trial_data[
-                [c for c in dynamic_trial_data.columns if c != 'trial_num']
-                ].values.astype(np.float32)
-            # Maximum absolute value scaling
-            if max_abs_scale:
-                data = maxabs_scale(data, axis=0)
-            data = [row for row in data]
-            self.dynamic_data.append(data)
 
         # Combine trial types
         # Classify left versus right motor response
@@ -114,8 +100,162 @@ class SubjectMontageData(EROSData):
         self.labels.rename({'trial_type': 'label'}, axis=1, inplace=True)
         self.labels = self.labels.dropna(
             axis=0, subset=['label']).copy().reset_index(drop=True)
+        self.trial_id = self.labels.loc[:, 'trial_num'].unique()
         self.labels = self.labels.loc[:, 'label'].values.astype(np.float32)
         self.idxs = list(range(len(self.labels)))
+
+        # Use dynamic_data to store a list of each trial's signal, where each
+        # element of the list is a list of 1D numpy arrays where each array
+        # represents a single recording data point.
+        self.dynamic_data = []
+        for trial in self.trial_id:
+            dynamic_trial_data = self.dynamic_table.loc[
+                self.dynamic_table['trial_num'] == trial, :]
+            data = dynamic_trial_data[
+                [c for c in dynamic_trial_data.columns if c != 'trial_num']
+                ].values.astype(np.float32)
+            # Maximum absolute value scaling
+            if max_abs_scale:
+                data = maxabs_scale(data, axis=0)
+            data = [row for row in data]
+            self.dynamic_data.append(data)
+
+
+class MontagePretrainData(EROSData):
+    """
+    Creates a representation of the EROS data set that groups subjects' dynamic
+    data with their corresponding labels based on the classification task.
+    Performs basic pre-processing to as specified by the input arguments.
+
+    Functions identically to the SubjectMontageDataset, except the montage
+    of interest is excluded from the data and all other montages are used.
+    """
+    def __init__(self, data_dir: str, subject: str, montage: str,
+                 classification_task: str,
+                 filter_zeros: bool, average_chan: bool, max_abs_scale: bool):
+
+        self.data_dir = data_dir
+
+        s04 = pd.DataFrame()
+        s08 = pd.DataFrame()
+        s13 = pd.DataFrame()
+
+        prev_trial_max = 0
+        for m in constants.MONTAGES:
+            if m != montage:
+                temp04 = pd.read_parquet(
+                    os.path.join(data_dir, f'{subject}_{m}_4.parquet'))
+                temp08 = pd.read_parquet(
+                    os.path.join(data_dir, f'{subject}_{m}_8.parquet'))
+                temp13 = pd.read_parquet(
+                    os.path.join(data_dir, f'{subject}_{m}_13.parquet'))
+
+                temp04 = temp04.rename(
+                    {f'ph_{m}_{i}': f'ph_{i}' for i in range(128)},
+                    axis=1)
+                temp08 = temp08.rename(
+                    {f'ph_{m}_{i}': f'ph_{i}' for i in range(128)},
+                    axis=1)
+                temp13 = temp13.rename(
+                    {f'ph_{m}_{i}': f'ph_{i}' for i in range(128)},
+                    axis=1)
+
+                # Create unique trial numbers
+                temp04.loc[:, 'trial_num'] = \
+                    temp04.loc[:, 'trial_num'].values + prev_trial_max
+                temp08.loc[:, 'trial_num'] = \
+                    temp08.loc[:, 'trial_num'].values + prev_trial_max
+                temp13.loc[:, 'trial_num'] = \
+                    temp13.loc[:, 'trial_num'].values + prev_trial_max
+                prev_trial_max = max(temp04.loc[:, 'trial_num'].values) + 1
+
+                s04 = s04.append(temp04, ignore_index=True)
+                s08 = s08.append(temp08, ignore_index=True)
+                s13 = s13.append(temp13, ignore_index=True)
+
+        s04.columns = [f'{c}_04' for c in s04.columns]
+        s08.columns = [f'{c}_08' for c in s08.columns]
+        s13.columns = [f'{c}_13' for c in s13.columns]
+
+        self.data = pd.concat([s04, s08, s13], axis=1)
+        self.data = self.data.rename({'trial_num_04': 'trial_num',
+                                      'subject_id_04': 'subject_id',
+                                      'trial_type_04': 'trial_type',
+                                      'montage_04': 'montage'}, axis=1)
+        self.data = self.data.drop(['freq_band_04', 'event_04',
+                                    'trial_num_08', 'subject_id_08',
+                                    'trial_type_08', 'montage_08',
+                                    'freq_band_08', 'event_08',
+                                    'trial_num_13', 'subject_id_13',
+                                    'trial_type_13', 'montage_13',
+                                    'freq_band_13', 'event_13'], axis=1)
+
+        meta_cols = ['trial_num', 'subject_id', 'montage']
+        chan_cols = [c for c in self.data.columns if 'ph_' in c]
+        self.meta_data = self.data.loc[:, meta_cols]
+        self.dynamic_table = self.data.loc[:, chan_cols + ['trial_num']]
+        self.labels = self.data.groupby('trial_num').mean().reset_index()[
+            ['trial_num', 'trial_type']]
+        self.labels.index.name = None
+        self.labels = pd.DataFrame(self.labels,
+                                   columns=['trial_num', 'trial_type'])
+
+        # Filter channels with all zeros
+        if filter_zeros:
+            self.dynamic_table.loc[:, (self.dynamic_table != 0).any(axis=0)]
+        # Average channels of the same frequency band
+        if average_chan:
+            self.dynamic_table['avg_04'] = self.dynamic_table[
+                [c for c in self.dynamic_table if '_04' in c and 'ph_' in c]
+                ].mean(axis=1)
+            self.dynamic_table['avg_08'] = self.dynamic_table[
+                [c for c in self.dynamic_table if '_08' in c and 'ph_' in c]
+                ].mean(axis=1)
+            self.dynamic_table['avg_13'] = self.dynamic_table[
+                [c for c in self.dynamic_table if '_13' in c and 'ph_' in c]
+                ].mean(axis=1)
+            self.dynamic_table = self.dynamic_table.loc[
+                :, ['avg_04', 'avg_08', 'avg_13'] + ['trial_num']]
+
+        # Combine trial types
+        # Classify left versus right motor response
+        if classification_task == 'motor_LR':
+            func = combine_trial_types.combine_motor_LR
+            self.classes = 2
+        # Classify stimulus modality and motor response
+        elif classification_task == 'stim_motor':
+            func = combine_trial_types.stim_modality_motor_LR_labels
+            self.classes = 4
+        # Classify response modality, stimulus modality, and response
+        # polarity
+        elif classification_task == 'response_stim':
+            func = combine_trial_types.sresponse_stim_modality_labels
+            self.classes = 8
+        else:
+            raise NotImplementedError('Classification task not supported')
+        self.labels['trial_type'] = self.labels['trial_type'].apply(func)
+        self.labels.rename({'trial_type': 'label'}, axis=1, inplace=True)
+        self.labels = self.labels.dropna(
+            axis=0, subset=['label']).copy().reset_index(drop=True)
+        self.trial_id = self.labels.loc[:, 'trial_num'].unique()
+        self.labels = self.labels.loc[:, 'label'].values.astype(np.float32)
+        self.idxs = list(range(len(self.labels)))
+
+        # Use dynamic_data to store a list of each trial's signal, where each
+        # element of the list is a list of 1D numpy arrays where each array
+        # represents a single recording data point for multiple channels.
+        self.dynamic_data = []
+        for trial in self.trial_id:
+            dynamic_trial_data = self.dynamic_table.loc[
+                self.dynamic_table['trial_num'] == trial, :]
+            data = dynamic_trial_data[
+                [c for c in dynamic_trial_data.columns if c != 'trial_num']
+                ].values.astype(np.float32)
+            # Maximum absolute value scaling
+            if max_abs_scale:
+                data = maxabs_scale(data, axis=0)
+            data = [row for row in data]
+            self.dynamic_data.append(data)
 
 
 class SubjectMontageDataset(Dataset):
