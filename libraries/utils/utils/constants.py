@@ -3,7 +3,7 @@ import os
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 SHARED_DIR = '/shared/rsaas/nschiou2/'
 
-DATA_DIR = os.path.join(SHARED_DIR, 'EROS')
+DATA_DIR = os.path.join(SHARED_DIR, 'FOS')
 
 MATFILE_DIR = os.path.join(DATA_DIR, 'matfiles')
 PYTHON_DIR = os.path.join(DATA_DIR, 'python')
