@@ -57,12 +57,28 @@ def evaluate(true: dict, pred: dict, prob: dict):
     final_pred = pred[max(pred.keys())]
     final_prob = prob[max(prob.keys())]
 
-    tn, fp, fn, tp = metrics.confusion_matrix(final_true, final_pred).ravel()
+    try:
+        _, fp, fn, tp = metrics.confusion_matrix(
+            final_true, final_pred).ravel()
+    except ValueError:
+        if final_true[0] == 1 and final_pred[0] == 1:
+            _, fp, fn, tp = 0, 0, 0, len(final_true)
+        elif final_true[0] == 1 and final_pred[0] == 0:
+            _, fp, fn, tp = 0, 0, len(final_true), 0
+        elif final_true[0] == 0 and final_pred[0] == 1:
+            _, fp, fn, tp = 0, len(final_true), 0, 0
+        elif final_true[0] == 0 and final_pred[0] == 0:
+            _, fp, fn, tp = len(final_true), 0, 0, 0
+        print('true', final_true, len(final_true), flush=True)
+        print('pred', final_pred, len(final_pred), flush=True)
     eval_metrics['accuracy'] = metrics.accuracy_score(final_true, final_pred)
     eval_metrics['precision'] = tp / (tp + fp) if (tp + fp) != 0 else np.nan
     eval_metrics['recall'] = tp / (tp + fn) if (tp + fn) != 0 else np.nan
     eval_metrics['f1'] = metrics.f1_score(final_true, final_pred)
-    eval_metrics['auc'] = metrics.roc_auc_score(final_true, final_prob)
+    try:
+        eval_metrics['auc'] = metrics.roc_auc_score(final_true, final_prob)
+    except ValueError:
+        pass
 
     return eval_metrics
 
