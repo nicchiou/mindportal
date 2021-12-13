@@ -4,6 +4,7 @@ import json
 import logging
 import multiprocessing
 import os
+from queue import Empty
 import sys
 import time
 from collections import Counter, defaultdict
@@ -147,7 +148,9 @@ def train(subject: str, montage: str,
     best_valid_loss = 1e6
     best_valid_metric = -1.0
     train_loss = list()
+    train_acc = list()
     valid_loss = list()
+    valid_acc = list()
     # keep track of last few models
     if args.early_stop != -1:
         last_models_list = [None] * args.early_stop
@@ -158,14 +161,15 @@ def train(subject: str, montage: str,
 
         # ======== TRAIN ======== #
         model.train()
-        loss_train = 0.0
-        total = 0
+        running_loss_train = 0.0
+        total = 0.0
         prob_train = defaultdict(list)
         pred_train = defaultdict(list)
         true_train = defaultdict(list)
-        for idx, data in enumerate(train_loader):
+        for _, data in enumerate(train_loader):
             _, dynamic_data, lengths, labels = \
                 data[0], data[1], data[2], data[3].to(device)
+            total += labels.shape[0]
 
             # Maximum sequence length - longer sequences are truncated from the
             # end (default: -1 -> do not truncate)
@@ -301,22 +305,23 @@ def train(subject: str, montage: str,
 
             if hasattr(loss, 'item'):
                 optimizer.step()
-                loss_train += loss.item()
+                running_loss_train += loss.item() * labels.shape[0]
 
         # Evaluate training predictions against ground truth labels
         metrics_train = evaluate(true_train, pred_train, prob_train)
 
         # Log training metrics
-        loss_train_avg = loss_train / total
+        loss_train_avg = running_loss_train / total
         train_loss.append(loss_train_avg)
+        train_acc.append(metrics_train['accuracy'])
         logger.info(f'train: avg_loss = {loss_train_avg:.5f}')
         for metric, value in metrics_train.items():
             logger.info(f'| {metric} = {value:.3f}')
 
         # ======== VALID ======== #
         model.eval()
-        loss_valid = 0.0
-        total = 0
+        running_loss_valid = 0.0
+        total = 0.0
         prob_valid = defaultdict(list)
         pred_valid = defaultdict(list)
         true_valid = defaultdict(list)
@@ -324,6 +329,7 @@ def train(subject: str, montage: str,
             for data in valid_loader:
                 _, dynamic_data, lengths, labels = \
                     data[0], data[1], data[2], data[3].to(device)
+                total += labels.shape[0]
                 dynamic_data = pad_sequence(
                     dynamic_data, batch_first=True, padding_value=0).to(device)
 
@@ -426,14 +432,15 @@ def train(subject: str, montage: str,
                         c_lengths[seq_step] < lengths - 1).long()
 
                 if hasattr(loss, 'item'):
-                    loss_valid += loss.item()
+                    running_loss_valid += loss.item() * labels.shape[0]
 
         # Evaluate validation predictions against ground truth labels
         metrics_valid = evaluate(true_valid, pred_valid, prob_valid)
 
         # Log validation metrics
-        loss_valid_avg = loss_valid / total
+        loss_valid_avg = running_loss_valid / total
         valid_loss.append(loss_valid_avg)
+        valid_acc.append(metrics_valid['accuracy'])
         logger.info(f'valid: avg_loss = {loss_valid_avg:.5f}')
         for metric, value in metrics_valid.items():
             logger.info(f'| {metric} = {value:.3f}')
@@ -599,7 +606,9 @@ def train(subject: str, montage: str,
     trial_results['subject'] = subject
     trial_results['montage'] = montage
     trial_results['train_losses'] = train_loss
+    trial_results['train_acc'] = train_acc
     trial_results['valid_losses'] = valid_loss
+    trial_results['valid_acc'] = valid_acc
     trial_results['final_test_loss'] = final_test_loss
     for metric, value in metrics_train.items():
         trial_results['train_' + metric] = value
@@ -732,9 +741,15 @@ if __name__ == '__main__':
     montage_idx = np.argwhere(
         np.array(constants.MONTAGES) == args.start_montage)
 
+    first_subject = True
     for subject in constants.SUBJECT_IDS[int(subject_idx):]:
-        for montage in constants.MONTAGES[int(montage_idx):]:
-            input_queue.put((subject, montage))
+        if first_subject:
+            for montage in constants.MONTAGES[int(montage_idx):]:
+                input_queue.put((subject, montage))
+            first_subject = False
+        else:
+            for montage in constants.MONTAGES:
+                input_queue.put((subject, montage))
 
     print(f'Approximate subject/montage queue size: {input_queue.qsize()}')
     prog_bar = tqdm(total=input_queue.qsize())
@@ -764,8 +779,10 @@ if __name__ == '__main__':
             result_df.to_csv(
                 os.path.join(exp_dir, 'trial_results.csv'), index=False)
             prog_bar.update(n=1)
-        except BaseException:
+        except Empty:
             pass
+        except Exception:
+            sys.exit(11)
         any_alive = False
         for proc in proclist:
             if proc.is_alive():
