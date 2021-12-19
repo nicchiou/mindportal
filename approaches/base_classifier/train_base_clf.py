@@ -28,16 +28,17 @@ def train_eval_clf(args, X_train, y_train, X_valid, y_valid, X_test, y_test):
 
     if args.clf_type == 'SVM':
         clf = svm.LinearSVC(penalty=args.penalty, loss=args.loss, C=args.C,
-                            max_iter=args.max_iter, random_state=args.seed,
+                            max_iter=args.max_iter,
+                            random_state=args.train_seed,
                             dual=False if args.penalty == 'l1' and
                             args.loss == 'squared_hinge' else True)
     elif args.clf_type == 'RBF_SVM':
         clf = svm.SVC(C=args.C, max_iter=args.max_iter,
-                      random_state=args.seed)
+                      random_state=args.train_seed)
     elif args.clf_type == 'RF':
         clf = RandomForestClassifier(n_estimators=200, criterion='entropy',
                                      max_depth=args.max_depth,
-                                     random_state=args.seed)
+                                     random_state=args.train_seed)
     else:
         raise NotImplementedError(
             'Classifier type not supported!')
@@ -129,8 +130,9 @@ if __name__ == '__main__':
     parser.add_argument('--C', type=float, default=1.0)
     parser.add_argument('--max_iter', type=int, default=5000)
     parser.add_argument('--max_depth', type=int, default=3)
-    parser.add_argument('--sampler_seed', type=int, default=8)
-    parser.add_argument('--seed', type=int, default=8)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--seed_cv', type=int, default=15)
+    parser.add_argument('--train_seed', type=int, default=8)
     parser.add_argument('--n_splits', type=int, default=5, help='cv splits')
     parser.add_argument('--randomize_trials', action='store_true')
 
@@ -202,7 +204,7 @@ if __name__ == '__main__':
 
             # Stratified K-fold cross-validation
             skf = StratifiedKFold(n_splits=args.n_splits, shuffle=True,
-                                  random_state=args.sampler_seed)
+                                  random_state=args.seed_cv)
             for idx, (train_idx, valid_idx) in enumerate(
                     skf.split(X_learn, y_learn)):
                 trial_results['idx'] = idx

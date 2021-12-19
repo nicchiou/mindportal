@@ -49,7 +49,7 @@ def learn_eval_split_non_csp(args: argparse.Namespace, subset: pd.DataFrame):
     y = subset['label'].values
     X_learn, X_eval, y_learn, y_eval = train_test_split(
         X, y, test_size=0.2, stratify=y,
-        random_state=args.sampler_seed)
+        random_state=args.seed)
 
     # Randomize trial types if applicable
     if args.randomize_trials:
@@ -108,7 +108,7 @@ def learn_eval_split_csp(args: argparse.Namespace, subset: pd.DataFrame):
     # Train-test split
     idx_learn, idx_eval = train_test_split(
         list(subset.index), test_size=0.2, stratify=y,
-        random_state=args.sampler_seed)
+        random_state=args.seed)
     X_learn = X[idx_learn, :, :]
     X_eval = X[idx_eval, :, :]
     y_learn = y[idx_learn]
