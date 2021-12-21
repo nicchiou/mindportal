@@ -83,6 +83,37 @@ def evaluate(true: dict, pred: dict, prob: dict):
     return eval_metrics
 
 
+def save_predictions(subject_id: str, montage: str,
+                     true: dict, pred: dict, prob: dict,
+                     exp_dir: str, subset: str, checkpoint_suffix: str = ''):
+    """
+    Writes a DataFrame containing the predictions for a given cross-validation
+    iteration, along with the true labels and probabilities (confidence).
+    """
+
+    result_df = pd.DataFrame(
+        columns=['subject_id', 'montage', 'cv_iter', 'true', 'pred', 'prob'])
+    cv_iter = int(checkpoint_suffix) \
+        if checkpoint_suffix.isdigit() else checkpoint_suffix
+
+    # Iterate in reverse to get predictions and labels from the end
+    final_true = true[max(true.keys())]
+    final_pred = pred[max(pred.keys())]
+    final_prob = prob[max(prob.keys())]
+
+    result_df['true'] = final_true
+    result_df['pred'] = final_pred
+    result_df['prob'] = final_prob
+    result_df.loc[:, 'subject_id'] = subject_id
+    result_df.loc[:, 'montage'] = montage
+    result_df.loc[:, 'cv_iter'] = cv_iter
+
+    result_df.to_parquet(os.path.join(
+        exp_dir, 'predictions',
+        f'{subject_id}_{montage}_{subset}_{checkpoint_suffix}.parquet'),
+        index=False)
+
+
 def evaluate_ts(data_loader: DataLoader, models: List[torch.nn.Module],
                 device: torch.device, subset_name: str, criterion,
                 logistic_threshold: float, exp_dir: str, metric:
