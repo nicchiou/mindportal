@@ -4,11 +4,11 @@ import json
 import logging
 import multiprocessing
 import os
-from queue import Empty
 import sys
 import time
 import traceback
 from collections import Counter, defaultdict
+from queue import Empty
 
 import numpy as np
 import pandas as pd
@@ -17,7 +17,8 @@ from seq_rnn.dataset import (MontagePretrainData, SubjectMontageData,
                              SubjectMontageDataset)
 from seq_rnn.loss_fxns import FocalLoss
 from seq_rnn.models import load_architecture
-from seq_rnn.utils import deterministic, evaluate, evaluate_ts
+from seq_rnn.utils import (deterministic, evaluate, evaluate_ts,
+                           save_predictions)
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 from torchsampler import ImbalancedDatasetSampler
@@ -49,13 +50,13 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
                 args.max_abs_scale)
             train_dataset = SubjectMontageDataset(data=data, subset='train',
                                                   stratified=args.stratified,
-                                                  seed=args.train_seed)
+                                                  seed=args.seed)
             valid_dataset = SubjectMontageDataset(data=data, subset='valid',
                                                   stratified=args.stratified,
-                                                  seed=args.train_seed)
+                                                  seed=args.seed)
             test_dataset = SubjectMontageDataset(data=data, subset='test',
                                                  stratified=args.stratified,
-                                                 seed=args.train_seed)
+                                                 seed=args.seed)
 
             if args.use_imbalanced:
                 train_loader = DataLoader(
@@ -80,6 +81,7 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             # Initialize PyTorch model with specified arguments and load to
             # device
             model = load_architecture(device, args)
+
             # Initialize optimizer
             if args.optimizer == 'Adam':
                 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,
@@ -94,6 +96,7 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
                                                 momentum=0.9)
             else:
                 raise NotImplementedError('Optimizer not implemented')
+
             # Initialize criterion (binary)
             if args.criterion == 'bce':
                 criterion = torch.nn.BCELoss()
@@ -112,7 +115,7 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
                 subject, montage,
                 args, train_loader, valid_loader, test_loader, optimizer,
                 criterion, model, device, exp_dir, verbose=args.verbose,
-                checkpoint_suffix=f'{subject}_{montage}_pretrain')
+                checkpoint_suffix='pretrain')
             trial_results = {f'pretrain_{key}': value
                              for key, value in trial_results.items()}
 
@@ -129,13 +132,13 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
                 args.max_abs_scale)
             train_dataset = SubjectMontageDataset(data=data, subset='train',
                                                   stratified=args.stratified,
-                                                  seed=args.train_seed)
+                                                  seed=args.seed)
             valid_dataset = SubjectMontageDataset(data=data, subset='valid',
                                                   stratified=args.stratified,
-                                                  seed=args.train_seed)
+                                                  seed=args.seed)
             test_dataset = SubjectMontageDataset(data=data, subset='test',
                                                  stratified=args.stratified,
-                                                 seed=args.train_seed)
+                                                 seed=args.seed)
             if args.use_imbalanced:
                 train_loader = DataLoader(
                     train_dataset, batch_size=args.batch_size,
@@ -156,12 +159,40 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             if not args.dynamic_input_size:
                 args.dynamic_input_size = list(train_loader)[0][1][0].shape[-1]
 
+            # Initialize optimizer
+            if args.optimizer == 'Adam':
+                optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,
+                                             weight_decay=args.weight_decay)
+            elif args.optimizer == 'SGD':
+                optimizer = torch.optim.SGD(model.parameters(), lr=args.lr,
+                                            weight_decay=args.weight_decay,
+                                            momentum=0.9)
+            elif args.optimizer == 'RMSprop':
+                optimizer = torch.optim.RMSprop(model.parameters(), lr=args.lr,
+                                                weight_decay=args.weight_decay,
+                                                momentum=0.9)
+            else:
+                raise NotImplementedError('Optimizer not implemented')
+
+            # Initialize criterion (binary)
+            if args.criterion == 'bce':
+                criterion = torch.nn.BCELoss()
+            elif args.criterion == 'bce_logits':
+                label_count = Counter(train_dataset.labels)
+                pos_weight = torch.Tensor(
+                    [label_count[0] / label_count[1]]).to(device)
+                criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+            elif args.criterion == 'focal_loss':
+                criterion = FocalLoss(args.focal_loss_gamma)
+            else:
+                raise NotImplementedError('Criterion not implemented')
+
             # Train
             fine_tune_results = train(
                 subject, montage,
                 args, train_loader, valid_loader, test_loader, optimizer,
                 criterion, model, device, exp_dir, verbose=args.verbose,
-                checkpoint_suffix=f'{subject}_{montage}')
+                checkpoint_suffix='')
             trial_results.update(fine_tune_results)
 
             trial_results['Status'] = 'PASS'
@@ -199,6 +230,7 @@ def train(subject: str, montage: str,
     # Initialize training state and default settings
     epochs_without_improvement = 0
     trial_results = dict()
+    best_epoch_results = dict()
     best_valid_metrics = dict()
     best_valid_metrics['loss'] = -1
     best_valid_metrics['accuracy'] = -1
@@ -208,6 +240,7 @@ def train(subject: str, montage: str,
     best_valid_metrics['auc'] = -1
     best_valid_loss = 1e6
     best_valid_metric = -1.0
+    grad_norm = list()
     train_loss = list()
     train_acc = list()
     valid_loss = list()
@@ -223,6 +256,7 @@ def train(subject: str, montage: str,
         # ======== TRAIN ======== #
         model.train()
         running_loss_train = 0.0
+        running_grad_norm = 0.0
         total = 0.0
         prob_train = defaultdict(list)
         pred_train = defaultdict(list)
@@ -368,12 +402,19 @@ def train(subject: str, montage: str,
                 optimizer.step()
                 running_loss_train += loss.item() * labels.shape[0]
 
+            # Calculate gradient norms
+            for p in list(
+                    filter(lambda p: p.grad is not None, model.parameters())):
+                running_grad_norm += p.grad.data.norm(2).item()
+
         # Evaluate training predictions against ground truth labels
         metrics_train = evaluate(true_train, pred_train, prob_train)
 
         # Log training metrics
         loss_train_avg = running_loss_train / total
+        grad_norm_avg = running_grad_norm / total
         train_loss.append(loss_train_avg)
+        grad_norm.append(grad_norm_avg)
         train_acc.append(metrics_train['accuracy'])
         logger.info(f'train: avg_loss = {loss_train_avg:.5f}')
         for metric, value in metrics_train.items():
@@ -508,9 +549,10 @@ def train(subject: str, montage: str,
 
         # Save checkpoints for the last few models
         if len(checkpoint_suffix) == 0:
-            checkpoint_last_name = 'checkpoint_last.pt'
+            checkpoint_last_name = f'{subject}_{montage}_checkpoint_last.pt'
         else:
-            checkpoint_last_name = f'checkpoint_last_{checkpoint_suffix}.pt'
+            checkpoint_last_name = \
+                f'{subject}_{montage}_checkpoint_last_{checkpoint_suffix}.pt'
         torch.save(model.state_dict(),
                    os.path.join(exp_dir, 'checkpoints', checkpoint_last_name))
 
@@ -519,21 +561,37 @@ def train(subject: str, montage: str,
         eps = 0.001
         if metrics_valid[args.metric] > best_valid_metric and \
                 metrics_valid[args.metric] - best_valid_metric >= eps:
+            # Reset early stopping epochs w/o improvement
             epochs_without_improvement = 0
+            # Record best validation metrics
             best_valid_loss = loss_valid_avg
             best_valid_metric = metrics_valid[args.metric]
             for metric, value in metrics_valid.items():
                 best_valid_metrics[metric] = value
             best_valid_metrics['loss'] = loss_valid_avg
+            # Update best epoch results
+            best_epoch_results['train'] = {
+                'true': true_train,
+                'pred': pred_train,
+                'prob': prob_train}
+            best_epoch_results['valid'] = {
+                'true': true_valid,
+                'pred': pred_valid,
+                'prob': prob_valid}
+            # Save checkpoints
             if len(checkpoint_suffix) == 0:
-                checkpoint_best_name = 'checkpoint_best.pt'
+                checkpoint_best_name = \
+                    f'{subject}_{montage}_checkpoint_best.pt'
             else:
                 checkpoint_best_name = \
-                    f'checkpoint_best_{checkpoint_suffix}.pt'
+                    f'{subject}_{montage}_checkpoint_best_{checkpoint_suffix}'\
+                    '.pt'
             torch.save(model.state_dict(),
                        os.path.join(exp_dir, 'checkpoints',
                                     checkpoint_best_name))
+            # Save best model as a deepcopy
             best_model = copy.deepcopy(model)
+            # Log best validation metrics
             logger.info(f'best valid loss = {best_valid_loss:.3f}')
             for metric, value in best_valid_metrics.items():
                 logger.info(f'best valid {metric} = {value:.3f}')
@@ -553,12 +611,30 @@ def train(subject: str, montage: str,
     model.load_state_dict(copy.deepcopy(best_model.state_dict()))
     model.to(device)
 
-    # ======== VALIDATION ======== #
+    # ======== EVALUATE TRAIN ======== #
+    metrics_train = evaluate(best_epoch_results['train']['true'],
+                             best_epoch_results['train']['pred'],
+                             best_epoch_results['train']['prob'])
+    save_predictions(subject, montage,
+                     best_epoch_results['train']['true'],
+                     best_epoch_results['train']['pred'],
+                     best_epoch_results['train']['prob'],
+                     exp_dir, 'train', checkpoint_suffix)
+
+    # ======== EVALUTE VALIDATION ======== #
     extra_name_parquet = f'_{checkpoint_suffix}' \
         if len(checkpoint_suffix) != 0 else ''
     _, _ = evaluate_ts(valid_loader, [model], device,
                        'valid' + extra_name_parquet, criterion,
                        args.logistic_threshold, exp_dir, max_seq=args.max_seq)
+    metrics_valid = evaluate(best_epoch_results['valid']['true'],
+                             best_epoch_results['valid']['pred'],
+                             best_epoch_results['valid']['prob'])
+    save_predictions(subject, montage,
+                     best_epoch_results['valid']['true'],
+                     best_epoch_results['valid']['pred'],
+                     best_epoch_results['valid']['prob'],
+                     exp_dir, 'valid', checkpoint_suffix)
 
     # ======== TEST ======== #
     model.eval()
@@ -662,10 +738,13 @@ def train(subject: str, montage: str,
                                      args.logistic_threshold, exp_dir,
                                      max_seq=args.max_seq)
     metrics_test = evaluate(true_test, pred_test, prob_test)
+    save_predictions(subject, montage, true_test, pred_test, prob_test,
+                     exp_dir, 'test', checkpoint_suffix)
 
     # ======== SUMMARY ======== #
     trial_results['subject'] = subject
     trial_results['montage'] = montage
+    trial_results['grad_norm'] = grad_norm
     trial_results['train_losses'] = train_loss
     trial_results['train_acc'] = train_acc
     trial_results['valid_losses'] = valid_loss
@@ -673,7 +752,12 @@ def train(subject: str, montage: str,
     trial_results['final_test_loss'] = final_test_loss
     for metric, value in metrics_train.items():
         trial_results['train_' + metric] = value
-    for metric, value in best_valid_metrics.items():
+    for metric, value in metrics_valid.items():
+        try:
+            assert (value == best_valid_metrics[metric]) or \
+                   (np.isnan(value) and np.isnan(best_valid_metrics[metric]))
+        except AssertionError:
+            print(value, best_valid_metrics[metric])
         trial_results['valid_' + metric] = value
     for metric, value in metrics_test.items():
         trial_results['test_' + metric] = value
@@ -748,8 +832,9 @@ if __name__ == '__main__':
                         help='Use bidirectional RNN in the encoder')
     parser.add_argument('--clipping', type=float, help='Gradient clipping',
                         default=0.25)
+    parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--train_seed', type=int,
-                        help='Random seed for training', default=42)
+                        help='Random seed for training', default=8)
     parser.add_argument('--logistic_threshold', type=float,
                         help='Threshold of the logistic regression',
                         default=0.5)
@@ -788,9 +873,11 @@ if __name__ == '__main__':
         args.anchor,
         'bandpass_only' if args.bandpass_only else 'rect_lowpass',
         'max_abs_scale' if args.max_abs_scale else 'no_scale',
+        f'{args.n_montages}_montages',
         args.arch, args.expt_name)
     os.makedirs(exp_dir, exist_ok=True)
     os.makedirs(os.path.join(exp_dir, 'checkpoints'), exist_ok=True)
+    os.makedirs(os.path.join(exp_dir, 'predictions'), exist_ok=True)
 
     # Initialize queue objects
     input_queue = multiprocessing.Queue()
@@ -820,8 +907,8 @@ if __name__ == '__main__':
 
     if args.cross_val != 1 or args.nested_cross_val != 1:
         raise NotImplementedError(
-            'Cross-validation is deprecated in train.py. '
-            'Use selection_cv.py')
+            'Cross-validation is deprecated in pretrain_montage.py. '
+            'Use cv_pretrain_montage.py')
 
     # Set up processes
     gpus = [i // 2 for i in range(2 * torch.cuda.device_count())]

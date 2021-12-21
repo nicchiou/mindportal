@@ -16,7 +16,8 @@ from seq_rnn.dataset import (DatasetBuilder, SubjectMontageData,
                              SubjectMontageDataset)
 from seq_rnn.loss_fxns import FocalLoss
 from seq_rnn.models import load_architecture
-from seq_rnn.utils import deterministic, evaluate, evaluate_ts
+from seq_rnn.utils import (deterministic, evaluate, evaluate_ts,
+                           save_predictions)
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -158,6 +159,7 @@ def train(subject: str, montage: str,
     # Initialize training state and default settings
     epochs_without_improvement = 0
     trial_results = dict()
+    best_epoch_results = dict()
     best_valid_metrics = dict()
     best_valid_metrics['loss'] = -1
     best_valid_metrics['accuracy'] = -1
@@ -476,9 +478,10 @@ def train(subject: str, montage: str,
 
         # Save checkpoints for the last few models
         if len(checkpoint_suffix) == 0:
-            checkpoint_last_name = 'checkpoint_last.pt'
+            checkpoint_last_name = f'{subject}_{montage}_checkpoint_last.pt'
         else:
-            checkpoint_last_name = f'checkpoint_last_{checkpoint_suffix}.pt'
+            checkpoint_last_name = \
+                f'{subject}_{montage}_checkpoint_last_{checkpoint_suffix}.pt'
         torch.save(model.state_dict(),
                    os.path.join(exp_dir, 'checkpoints', checkpoint_last_name))
 
@@ -487,21 +490,37 @@ def train(subject: str, montage: str,
         eps = 0.001
         if metrics_valid[args.metric] > best_valid_metric and \
                 metrics_valid[args.metric] - best_valid_metric >= eps:
+            # Reset early stopping epochs w/o improvement
             epochs_without_improvement = 0
+            # Record best validation metrics
             best_valid_loss = loss_valid_avg
             best_valid_metric = metrics_valid[args.metric]
             for metric, value in metrics_valid.items():
                 best_valid_metrics[metric] = value
             best_valid_metrics['loss'] = loss_valid_avg
+            # Update best epoch results
+            best_epoch_results['train'] = {
+                'true': true_train,
+                'pred': pred_train,
+                'prob': prob_train}
+            best_epoch_results['valid'] = {
+                'true': true_valid,
+                'pred': pred_valid,
+                'prob': prob_valid}
+            # Save checkpoints
             if len(checkpoint_suffix) == 0:
-                checkpoint_best_name = 'checkpoint_best.pt'
+                checkpoint_best_name = \
+                    f'{subject}_{montage}_checkpoint_best.pt'
             else:
                 checkpoint_best_name = \
-                    f'checkpoint_best_{checkpoint_suffix}.pt'
+                    f'{subject}_{montage}_checkpoint_best_{checkpoint_suffix}'\
+                    '.pt'
             torch.save(model.state_dict(),
                        os.path.join(exp_dir, 'checkpoints',
                                     checkpoint_best_name))
+            # Save best model as a deepcopy
             best_model = copy.deepcopy(model)
+            # Log best validation metrics
             logger.info(f'best valid loss = {best_valid_loss:.3f}')
             for metric, value in best_valid_metrics.items():
                 logger.info(f'best valid {metric} = {value:.3f}')
@@ -521,12 +540,30 @@ def train(subject: str, montage: str,
     model.load_state_dict(copy.deepcopy(best_model.state_dict()))
     model.to(device)
 
-    # ======== VALIDATION ======== #
+    # ======== EVALUATE TRAIN ======== #
+    metrics_train = evaluate(best_epoch_results['train']['true'],
+                             best_epoch_results['train']['pred'],
+                             best_epoch_results['train']['prob'])
+    save_predictions(subject, montage,
+                     best_epoch_results['train']['true'],
+                     best_epoch_results['train']['pred'],
+                     best_epoch_results['train']['prob'],
+                     exp_dir, 'train', checkpoint_suffix)
+
+    # ======== EVALUTE VALIDATION ======== #
     extra_name_parquet = f'_{checkpoint_suffix}' \
         if len(checkpoint_suffix) != 0 else ''
     _, _ = evaluate_ts(valid_loader, [model], device,
                        'valid' + extra_name_parquet, criterion,
                        args.logistic_threshold, exp_dir, max_seq=args.max_seq)
+    metrics_valid = evaluate(best_epoch_results['valid']['true'],
+                             best_epoch_results['valid']['pred'],
+                             best_epoch_results['valid']['prob'])
+    save_predictions(subject, montage,
+                     best_epoch_results['valid']['true'],
+                     best_epoch_results['valid']['pred'],
+                     best_epoch_results['valid']['prob'],
+                     exp_dir, 'valid', checkpoint_suffix)
 
     # ======== TEST ======== #
     model.eval()
@@ -630,6 +667,8 @@ def train(subject: str, montage: str,
                                      args.logistic_threshold, exp_dir,
                                      max_seq=args.max_seq)
     metrics_test = evaluate(true_test, pred_test, prob_test)
+    save_predictions(subject, montage, true_test, pred_test, prob_test,
+                     exp_dir, 'test', checkpoint_suffix)
 
     # ======== SUMMARY ======== #
     trial_results['subject'] = subject
@@ -642,7 +681,12 @@ def train(subject: str, montage: str,
     trial_results['final_test_loss'] = final_test_loss
     for metric, value in metrics_train.items():
         trial_results['train_' + metric] = value
-    for metric, value in best_valid_metrics.items():
+    for metric, value in metrics_valid.items():
+        try:
+            assert (value == best_valid_metrics[metric]) or \
+                   (np.isnan(value) and np.isnan(best_valid_metrics[metric]))
+        except AssertionError:
+            print(value, best_valid_metrics[metric])
         trial_results['valid_' + metric] = value
     for metric, value in metrics_test.items():
         trial_results['test_' + metric] = value
@@ -673,6 +717,10 @@ if __name__ == '__main__':
                         'modality, and response polarity).')
     parser.add_argument('--anchor', type=str, default='pc',
                         help='pre-cue (pc) or response stimulus (rs)')
+    parser.add_argument('--n_montages', type=int, default=8,
+                        help='number of montages to consider based on '
+                        'grouped montages; options include 8 (a-h) or 4 '
+                        '(grouped by trial)')
     parser.add_argument('--bandpass_only', action='store_true',
                         help='indicates whether to use the signal that has '
                         'not been rectified nor low-pass filtered')
@@ -765,9 +813,11 @@ if __name__ == '__main__':
         args.anchor,
         'bandpass_only' if args.bandpass_only else 'rect_lowpass',
         'max_abs_scale' if args.max_abs_scale else 'no_scale',
+        f'{args.n_montages}_montages',
         args.arch, args.expt_name)
     os.makedirs(exp_dir, exist_ok=True)
     os.makedirs(os.path.join(exp_dir, 'checkpoints'), exist_ok=True)
+    os.makedirs(os.path.join(exp_dir, 'predictions'), exist_ok=True)
 
     # Initialize queue objects
     input_queue = multiprocessing.Queue()
@@ -779,6 +829,7 @@ if __name__ == '__main__':
         exp_dir = os.path.join(exp_dir, f's_{args.subject}')
         os.makedirs(exp_dir, exist_ok=True)
         os.makedirs(os.path.join(exp_dir, 'checkpoints'), exist_ok=True)
+        os.makedirs(os.path.join(exp_dir, 'predictions'), exist_ok=True)
         for montage in constants.MONTAGES:
             input_queue.put((args.subject, montage))
     # Evaluate all subjects
