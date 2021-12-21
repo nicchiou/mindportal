@@ -43,8 +43,8 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
                 args.data_path, args.anchor,
                 'bandpass_only' if args.bandpass_only else 'rect_lowpass'),
             subject, montage,
-            args.classification_task, args.filter_zeros, args.average_chan,
-            args.max_abs_scale)
+            args.classification_task, args.n_montages,
+            args.filter_zeros, args.average_chan, args.max_abs_scale)
 
         db = DatasetBuilder(data=data, seed=args.seed, seed_cv=args.seed_cv)
 
@@ -795,6 +795,7 @@ if __name__ == '__main__':
                         help='Maximum sequence length (longer sequences are '
                         'truncated from the end default: -1 -> do not '
                         'truncate)', default=-1)
+    parser.add_argument('--n_procs', type=int, default=4)
     parser.add_argument('--verbose', action='store_true')
     args = parser.parse_args()
     args.stratified = not args.no_stratified
@@ -823,6 +824,12 @@ if __name__ == '__main__':
     input_queue = multiprocessing.Queue()
     results_queue = multiprocessing.Queue()
 
+    # Assign montage list based on the desired number of montages
+    if args.n_montages == 8:
+        montage_list = constants.MONTAGES
+    elif args.n_montages == 4:
+        montage_list = constants.PAIRED_MONTAGES
+
     # Evaluate only a subset of subjects
     if args.subset_subject_ids:
         assert args.subject in constants.SUBSET_SUBJECT_IDS
@@ -830,7 +837,7 @@ if __name__ == '__main__':
         os.makedirs(exp_dir, exist_ok=True)
         os.makedirs(os.path.join(exp_dir, 'checkpoints'), exist_ok=True)
         os.makedirs(os.path.join(exp_dir, 'predictions'), exist_ok=True)
-        for montage in constants.MONTAGES:
+        for montage in montage_list:
             input_queue.put((args.subject, montage))
     # Evaluate all subjects
     else:
@@ -838,16 +845,16 @@ if __name__ == '__main__':
         subject_idx = np.argwhere(
             np.array(constants.SUBJECT_IDS) == args.start_subject)
         montage_idx = np.argwhere(
-            np.array(constants.MONTAGES) == args.start_montage)
+            np.array(montage_list) == args.start_montage)
 
         first_subject = True
         for subject in constants.SUBJECT_IDS[int(subject_idx):]:
             if first_subject:
-                for montage in constants.MONTAGES[int(montage_idx):]:
+                for montage in montage_list[int(montage_idx):]:
                     input_queue.put((subject, montage))
                 first_subject = False
             else:
-                for montage in constants.MONTAGES:
+                for montage in montage_list:
                     input_queue.put((subject, montage))
 
     print(f'Approximate subject/montage queue size: {input_queue.qsize()}')
@@ -857,7 +864,8 @@ if __name__ == '__main__':
     result_df = pd.DataFrame()
 
     # Set up processes
-    gpus = [i // 4 for i in range(4 * torch.cuda.device_count())]
+    gpus = [i // args.n_procs
+            for i in range(args.n_procs * torch.cuda.device_count())]
     proclist = [multiprocessing.Process(
         target=internal_model_runner,
         args=(i, args, exp_dir, input_queue, results_queue)) for i in gpus]

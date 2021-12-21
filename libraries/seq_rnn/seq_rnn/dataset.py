@@ -24,7 +24,7 @@ class SubjectMontageData(FOSData):
     Performs basic pre-processing to as specified by the input arguments.
     """
     def __init__(self, data_dir: str, subject: str, montage: str,
-                 classification_task: str,
+                 classification_task: str, n_montages: int,
                  filter_zeros: bool, average_chan: bool, max_abs_scale: bool):
 
         self.data_dir = data_dir
@@ -62,6 +62,24 @@ class SubjectMontageData(FOSData):
         self.labels.index.name = None
         self.labels = pd.DataFrame(self.labels,
                                    columns=['trial_num', 'trial_type'])
+
+        # Group montages in pairs based on trial num recorded (a-b, c-d, etc.)
+        if n_montages == 8:
+            pass
+        elif n_montages == 4:
+            paired_montages = {'a': 'A', 'b': 'A',
+                               'c': 'B', 'd': 'B',
+                               'e': 'C', 'f': 'C',
+                               'g': 'D', 'h': 'D'}
+            columns = list(self.dynamic_table.columns)
+            for i, c in enumerate(columns):
+                if c == 'trial_num':
+                    continue
+                splits = c.split('_')
+                splits[1] = paired_montages[splits[1]]
+                joined = '_'.join(splits)
+                columns[i] = joined
+            self.dynamic_table.columns = columns
 
         # Filter channels with all zeros
         if filter_zeros:
@@ -131,7 +149,7 @@ class MontagePretrainData(FOSData):
     of interest is excluded from the data and all other montages are used.
     """
     def __init__(self, data_dir: str, subject: str, montage: str,
-                 classification_task: str,
+                 classification_task: str, n_montages: int,
                  filter_zeros: bool, average_chan: bool, max_abs_scale: bool):
 
         self.data_dir = data_dir
@@ -141,24 +159,21 @@ class MontagePretrainData(FOSData):
         s13 = pd.DataFrame()
 
         prev_trial_max = 0
+        paired_montages = {'a': 'A', 'b': 'A',
+                           'c': 'B', 'd': 'B',
+                           'e': 'C', 'f': 'C',
+                           'g': 'D', 'h': 'D'}
         for m in constants.MONTAGES:
-            if m != montage:
+            # Check whether we use the base montage for pre-training
+            if (n_montages == 8 and m != montage) or \
+               (n_montages == 4 and paired_montages[m] != montage):
+
                 temp04 = pd.read_parquet(
                     os.path.join(data_dir, f'{subject}_{m}_4.parquet'))
                 temp08 = pd.read_parquet(
                     os.path.join(data_dir, f'{subject}_{m}_8.parquet'))
                 temp13 = pd.read_parquet(
                     os.path.join(data_dir, f'{subject}_{m}_13.parquet'))
-
-                temp04 = temp04.rename(
-                    {f'ph_{m}_{i}': f'ph_{i}' for i in range(128)},
-                    axis=1)
-                temp08 = temp08.rename(
-                    {f'ph_{m}_{i}': f'ph_{i}' for i in range(128)},
-                    axis=1)
-                temp13 = temp13.rename(
-                    {f'ph_{m}_{i}': f'ph_{i}' for i in range(128)},
-                    axis=1)
 
                 # Create unique trial numbers
                 temp04.loc[:, 'trial_num'] = \
@@ -199,6 +214,20 @@ class MontagePretrainData(FOSData):
         self.labels.index.name = None
         self.labels = pd.DataFrame(self.labels,
                                    columns=['trial_num', 'trial_type'])
+
+        # Group montages in pairs based on trial num recorded (a-b, c-d, etc.)
+        if n_montages == 8:
+            pass
+        elif n_montages == 4:
+            columns = list(self.dynamic_table.columns)
+            for i, c in enumerate(columns):
+                if c == 'trial_num':
+                    continue
+                splits = c.split('_')
+                splits[1] = paired_montages[splits[1]]
+                joined = '_'.join(splits)
+                columns[i] = joined
+            self.dynamic_table.columns = columns
 
         # Filter channels with all zeros
         if filter_zeros:
