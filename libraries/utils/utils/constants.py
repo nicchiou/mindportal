@@ -18,4 +18,5 @@ RESULTS_DIR = os.path.join(SHARED_DIR, 'mindportal')
 
 SUBJECT_IDS = ['127', '130', '146', '149', '150', '151', '152', '153', '154',
                '155', '157', '505', '516', '527', '534']
+SUBSET_SUBJECT_IDS = ['154', '534']
 MONTAGES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
