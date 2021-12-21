@@ -4,20 +4,20 @@ from typing import Iterable, List, Tuple
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit
 from sklearn.preprocessing import maxabs_scale
 from torch.utils.data import Dataset
 
 from utils import combine_trial_types, constants
 
 
-class EROSData:
+class FOSData:
     """ Abstract class for optical imaging data. """
     def __init__(self):
         pass
 
 
-class SubjectMontageData(EROSData):
+class SubjectMontageData(FOSData):
     """
     Creates a representation of the EROS data set that groups subjects' dynamic
     data with their corresponding labels based on the classification task.
@@ -121,7 +121,7 @@ class SubjectMontageData(EROSData):
             self.dynamic_data.append(data)
 
 
-class MontagePretrainData(EROSData):
+class MontagePretrainData(FOSData):
     """
     Creates a representation of the EROS data set that groups subjects' dynamic
     data with their corresponding labels based on the classification task.
@@ -263,10 +263,10 @@ class SubjectMontageDataset(Dataset):
     Creates a PyTorch-loadable dataset that can be used for train/valid/test
     splits. Compatible with K-fold cross-validation and stratified splits.
     """
-    def __init__(self, data: EROSData, subset: str = None,
-                 seed: int = 42, props: Tuple[float] = (80, 10, 10),
+    def __init__(self, data: FOSData, subset: str = None,
+                 seed: int = 42, props: Tuple[float] = (70, 10, 20),
                  stratified: bool = False, cv: int = 1, nested_cv: int = 1,
-                 cv_idx: int = 0, nested_cv_idx: int = 0, seed_cv: int = 42):
+                 cv_idx: int = 0, nested_cv_idx: int = 0, seed_cv: int = 15):
         super().__init__()
 
         subsets = ['train', 'valid', 'test']
@@ -304,16 +304,18 @@ class SubjectMontageDataset(Dataset):
             learn_labels = self.labels[learn_idx]
 
             # train / valid split
-            sss_inner = StratifiedShuffleSplit(
-                n_splits=self.cv,
-                test_size=(
-                    self.proportions['valid'] / (self.proportions['train'] +
-                                                 self.proportions['valid'])),
-                random_state=self.seed_cv)
+            if self.cv == 1:
+                sss_inner = StratifiedShuffleSplit(
+                    n_splits=self.cv,
+                    test_size=(
+                        self.proportions['valid'] /
+                        (self.proportions['train'] +
+                         self.proportions['valid'])))
+            else:
+                sss_inner = StratifiedKFold(n_splits=self.cv, shuffle=True,
+                                            random_state=self.seed_cv)
             train_idx, valid_idx = list(
                 sss_inner.split(learn, learn_labels))[self.cv_idx]
-            train_idx = learn[train_idx]
-            valid_idx = learn[valid_idx]
 
             if self.subset == 'train':
                 self.idxs = list(train_idx)
@@ -377,13 +379,13 @@ class SubjectMontageDataset(Dataset):
 
 
 class DatasetBuilder:
-    def __init__(self, data: EROSData, seed: int = 42, seed_cv: int = 15):
+    def __init__(self, data: FOSData, seed: int = 42, seed_cv: int = 15):
         self.data = data
         self.seed = seed
         self.seed_cv = seed_cv
 
     def build_datasets(self, cv: int, nested_cv: int) -> Iterable[
-            Tuple[Iterable[Tuple[EROSData, EROSData]], EROSData]]:
+            Tuple[Iterable[Tuple[FOSData, FOSData]], FOSData]]:
         """
         Yields Datasets in the tuple form ((train, valid), test), where
         the inner tuple is iterated over for each cross-validation split.
@@ -395,21 +397,23 @@ class DatasetBuilder:
 
         # Iterate through possible test sets (typically just use one)
         for i in range(nested_cv):
-            def _inner_loop(data: EROSData, seed: int, seed_cv: seed):
+            def _inner_loop(data: FOSData, seed: int, seed_cv: seed):
                 # Iterate through cross-validation folds and yield train and
                 # valid Datasets
                 for j in range(cv):
-                    yield (EROSData(
-                        data=data, subset='train', stratified=True, cv=cv,
-                        nested_cv=nested_cv, cv_idx=j, nested_cv_idx=i,
-                        seed=seed, seed_cv=seed_cv),
-                           EROSData(
-                        data=data, subset='valid', stratified=True, cv=cv,
-                        nested_cv=nested_cv, cv_idx=j, nested_cv_idx=i,
-                        seed=seed, seed_cv=seed_cv))
+                    yield (SubjectMontageDataset(
+                                data=data, subset='train', stratified=True,
+                                cv=cv, nested_cv=nested_cv,
+                                cv_idx=j, nested_cv_idx=i,
+                                seed=seed, seed_cv=seed_cv),
+                           SubjectMontageDataset(
+                                data=data, subset='valid', stratified=True,
+                                cv=cv, nested_cv=nested_cv,
+                                cv_idx=j, nested_cv_idx=i,
+                                seed=seed, seed_cv=seed_cv))
 
             yield (_inner_loop(self.data, self.seed, self.seed_cv),
-                   EROSData(
+                   SubjectMontageDataset(
                        data=self.data, subset='test', stratified=True, cv=cv,
                        nested_cv=nested_cv, cv_idx=0, nested_cv_idx=i,
                        seed=seed, seed_cv=seed_cv))
