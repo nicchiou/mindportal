@@ -19,7 +19,7 @@ class FOSData:
 
 class SubjectMontageData(FOSData):
     """
-    Creates a representation of the EROS data set that groups subjects' dynamic
+    Creates a representation of the FOS data set that groups subjects' dynamic
     data with their corresponding labels based on the classification task.
     Performs basic pre-processing to as specified by the input arguments.
     """
@@ -141,7 +141,7 @@ class SubjectMontageData(FOSData):
 
 class MontagePretrainData(FOSData):
     """
-    Creates a representation of the EROS data set that groups subjects' dynamic
+    Creates a representation of the FOS data set that groups subjects' dynamic
     data with their corresponding labels based on the classification task.
     Performs basic pre-processing to as specified by the input arguments.
 
