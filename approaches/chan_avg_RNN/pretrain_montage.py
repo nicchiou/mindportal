@@ -810,7 +810,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, help='Mini-batch size',
                         default=32)
     parser.add_argument('--criterion', type=str,
-                        help='Possible options, "bce", "bce_loss", '
+                        help='Possible options, "bce", "bce_logits", '
                         '"focal_loss"', default='bce')
     parser.add_argument('--focal_loss_gamma', type=float,
                         help='Gamma coefficient of focal loss', default=2)
