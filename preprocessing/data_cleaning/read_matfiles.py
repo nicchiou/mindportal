@@ -34,6 +34,8 @@ if __name__ == '__main__':
     parser.add_argument('--save_subject_ts', action='store_true',
                         help='dictates whether to save subject time series '
                         'data by time step.')
+    parser.add_argument('--save_subject_dir', type=str,
+                        help='output directory to save sequential data')
 
     args = parser.parse_args()
 
@@ -174,7 +176,8 @@ if __name__ == '__main__':
             if args.save_subject_ts:
                 out_dir = os.path.join(
                     constants.SUBJECTS_DIR, args.anchor,
-                    'bandpass_only' if args.bandpass_only else 'rect_lowpass')
+                    'bandpass_only' if args.bandpass_only else 'rect_lowpass',
+                    args.save_subject_dir)
                 os.makedirs(out_dir, exist_ok=True)
                 suffix = freq_band[:2] if args.bandpass_only \
                     else freq_band[-2:]

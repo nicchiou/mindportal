@@ -40,7 +40,8 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
         # Set up Datasets and DataLoaders
         data = SubjectMontageData(
             os.path.join(
-                args.data_path, args.anchor,
+                os.path.join(constants.SUBJECTS_DIR, args.data_path),
+                args.anchor,
                 'bandpass_only' if args.bandpass_only else 'rect_lowpass'),
             subject, montage,
             args.classification_task, args.n_montages,
@@ -681,7 +682,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('expt_name', type=str, help='Experiment name')
     parser.add_argument('--data_path', type=str, help='Path to data',
-                        default=constants.SUBJECTS_DIR)
+                        default='avg')
     parser.add_argument('--start_subject', type=str, default='127',
                         help='resume training at specific subject')
     parser.add_argument('--start_montage', type=str, default='a',
