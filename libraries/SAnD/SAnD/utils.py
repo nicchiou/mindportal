@@ -4,6 +4,7 @@ import os
 import random
 
 import numpy as np
+import pandas as pd
 import torch
 from sklearn import metrics
 
@@ -83,3 +84,29 @@ def evaluate(true: list, pred: list, prob: list):
         pass
 
     return eval_metrics
+
+
+def save_predictions(subject_id: str, montage: str,
+                     true: list, pred: list, prob: list,
+                     exp_dir: str, subset: str, checkpoint_suffix: str = ''):
+    """
+    Writes a DataFrame containing the predictions for a given cross-validation
+    iteration, along with the true labels and probabilities (confidence).
+    """
+
+    result_df = pd.DataFrame(
+        columns=['subject_id', 'montage', 'cv_iter', 'true', 'pred', 'prob'])
+    cv_iter = int(checkpoint_suffix) \
+        if checkpoint_suffix.isdigit() else checkpoint_suffix
+
+    result_df['true'] = true
+    result_df['pred'] = pred
+    result_df['prob'] = prob
+    result_df.loc[:, 'subject_id'] = subject_id
+    result_df.loc[:, 'montage'] = montage
+    result_df.loc[:, 'cv_iter'] = cv_iter
+
+    result_df.to_parquet(os.path.join(
+        exp_dir, 'predictions',
+        f'{subject_id}_{montage}_{subset}_{checkpoint_suffix}.parquet'),
+        index=False)
