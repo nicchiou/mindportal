@@ -40,9 +40,10 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
         # Set up Datasets and DataLoaders
         data = SubjectMontageData(
             os.path.join(
-                os.path.join(constants.SUBJECTS_DIR, args.data_path),
+                constants.SUBJECTS_DIR,
                 args.anchor,
-                'bandpass_only' if args.bandpass_only else 'rect_lowpass'),
+                'bandpass_only' if args.bandpass_only else 'rect_lowpass',
+                args.data_path),
             subject, montage,
             args.classification_task, args.n_montages,
             args.filter_zeros, args.average_chan, args.max_abs_scale)

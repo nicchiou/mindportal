@@ -41,8 +41,10 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             # Set up Datasets and DataLoaders
             data = SubjectMontageData(
                 os.path.join(
-                    args.data_path, args.anchor,
-                    'bandpass_only' if args.bandpass_only else 'rect_lowpass'),
+                    constants.SUBJECTS_DIR,
+                    args.anchor,
+                    'bandpass_only' if args.bandpass_only else 'rect_lowpass',
+                    args.data_path),
                 subject, montage,
                 args.classification_task, 156, args.n_montages,
                 args.filter_zeros, args.average_chan, args.max_abs_scale)
@@ -437,7 +439,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('expt_name', type=str, help='Experiment name')
     parser.add_argument('--data_path', type=str, help='Path to data',
-                        default=constants.SUBJECTS_DIR)
+                        default='avg')
     parser.add_argument('--subset_subject_ids', action='store_true',
                         help='evaluate only a subset of the subjects (listed '
                         'in constants.py)')
