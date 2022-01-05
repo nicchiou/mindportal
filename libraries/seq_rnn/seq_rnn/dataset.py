@@ -29,12 +29,37 @@ class SubjectMontageData(FOSData):
 
         self.data_dir = data_dir
 
-        s04 = pd.read_parquet(
-            os.path.join(data_dir, f'{subject}_{montage}_4.parquet'))
-        s08 = pd.read_parquet(
-            os.path.join(data_dir, f'{subject}_{montage}_8.parquet'))
-        s13 = pd.read_parquet(
-            os.path.join(data_dir, f'{subject}_{montage}_13.parquet'))
+        s04 = pd.DataFrame()
+        s08 = pd.DataFrame()
+        s13 = pd.DataFrame()
+
+        # Group montages in pairs based on trial num recorded (a-b, c-d, etc.)
+        if n_montages == 8:
+            montages = [montage]
+        elif n_montages == 4:
+            paired_montages = {'a': 'A', 'b': 'A',
+                               'c': 'B', 'd': 'B',
+                               'e': 'C', 'f': 'C',
+                               'g': 'D', 'h': 'D'}
+            montages = [k for k, v in paired_montages.items() if v == montage]
+
+        for m in montages:
+            temp04 = pd.read_parquet(
+                os.path.join(data_dir, f'{subject}_{m}_4.parquet'))
+            temp08 = pd.read_parquet(
+                os.path.join(data_dir, f'{subject}_{m}_8.parquet'))
+            temp13 = pd.read_parquet(
+                os.path.join(data_dir, f'{subject}_{m}_13.parquet'))
+
+            # Add channels as new features
+            s04 = pd.concat([s04, temp04], axis=1)
+            s08 = pd.concat([s08, temp08], axis=1)
+            s13 = pd.concat([s13, temp13], axis=1)
+
+            # Remove duplicate columns (i.e. trial_num, subject_id, etc.)
+            s04 = s04.loc[:, ~s04.columns.duplicated()]
+            s08 = s08.loc[:, ~s08.columns.duplicated()]
+            s13 = s13.loc[:, ~s13.columns.duplicated()]
 
         s04.columns = [f'{c}_04' for c in s04.columns]
         s08.columns = [f'{c}_08' for c in s08.columns]
@@ -55,6 +80,8 @@ class SubjectMontageData(FOSData):
 
         meta_cols = ['trial_num', 'subject_id', 'montage']
         chan_cols = [c for c in self.data.columns if 'ph_' in c]
+        assert ((len(chan_cols) == 3 * 256 and n_montages == 4) or
+                (len(chan_cols) == 3 * 128 and n_montages == 8))
         self.meta_data = self.data.loc[:, meta_cols]
         self.dynamic_table = self.data.loc[:, chan_cols + ['trial_num']]
         self.labels = self.data.groupby('trial_num').mean().reset_index()[
@@ -62,24 +89,6 @@ class SubjectMontageData(FOSData):
         self.labels.index.name = None
         self.labels = pd.DataFrame(self.labels,
                                    columns=['trial_num', 'trial_type'])
-
-        # Group montages in pairs based on trial num recorded (a-b, c-d, etc.)
-        if n_montages == 8:
-            pass
-        elif n_montages == 4:
-            paired_montages = {'a': 'A', 'b': 'A',
-                               'c': 'B', 'd': 'B',
-                               'e': 'C', 'f': 'C',
-                               'g': 'D', 'h': 'D'}
-            columns = list(self.dynamic_table.columns)
-            for i, c in enumerate(columns):
-                if c == 'trial_num':
-                    continue
-                splits = c.split('_')
-                splits[1] = paired_montages[splits[1]]
-                joined = '_'.join(splits)
-                columns[i] = joined
-            self.dynamic_table.columns = columns
 
         # Filter channels with all zeros
         if filter_zeros:
@@ -163,30 +172,99 @@ class MontagePretrainData(FOSData):
                            'c': 'B', 'd': 'B',
                            'e': 'C', 'f': 'C',
                            'g': 'D', 'h': 'D'}
-        for m in constants.MONTAGES:
-            # Check whether we use the base montage for pre-training
-            if (n_montages == 8 and m != montage) or \
-               (n_montages == 4 and paired_montages[m] != montage):
 
-                temp04 = pd.read_parquet(
-                    os.path.join(data_dir, f'{subject}_{m}_4.parquet'))
-                temp08 = pd.read_parquet(
-                    os.path.join(data_dir, f'{subject}_{m}_8.parquet'))
-                temp13 = pd.read_parquet(
-                    os.path.join(data_dir, f'{subject}_{m}_13.parquet'))
+        if n_montages == 8:
+            for m in constants.MONTAGES:
+                # Check whether we use the base montage for pre-training
+                if m != montage:
+                    temp04 = pd.read_parquet(
+                        os.path.join(data_dir, f'{subject}_{m}_4.parquet'))
+                    temp08 = pd.read_parquet(
+                        os.path.join(data_dir, f'{subject}_{m}_8.parquet'))
+                    temp13 = pd.read_parquet(
+                        os.path.join(data_dir, f'{subject}_{m}_13.parquet'))
 
-                # Create unique trial numbers
-                temp04.loc[:, 'trial_num'] = \
-                    temp04.loc[:, 'trial_num'].values + prev_trial_max
-                temp08.loc[:, 'trial_num'] = \
-                    temp08.loc[:, 'trial_num'].values + prev_trial_max
-                temp13.loc[:, 'trial_num'] = \
-                    temp13.loc[:, 'trial_num'].values + prev_trial_max
-                prev_trial_max = max(temp04.loc[:, 'trial_num'].values) + 1
+                    # Rename montages to have common columns
+                    columns = list(temp04.columns)
+                    for i, c in enumerate(columns):
+                        if 'ph_' not in c:
+                            continue
+                        splits = c.split('_')
+                        splits[1] = 'chan'
+                        joined = '_'.join(splits)
+                        columns[i] = joined
+                    temp04.columns = columns
+                    temp08.columns = columns
+                    temp13.columns = columns
 
-                s04 = s04.append(temp04, ignore_index=True)
-                s08 = s08.append(temp08, ignore_index=True)
-                s13 = s13.append(temp13, ignore_index=True)
+                    # Create unique trial numbers
+                    temp04.loc[:, 'trial_num'] = \
+                        temp04.loc[:, 'trial_num'].values + prev_trial_max
+                    temp08.loc[:, 'trial_num'] = \
+                        temp08.loc[:, 'trial_num'].values + prev_trial_max
+                    temp13.loc[:, 'trial_num'] = \
+                        temp13.loc[:, 'trial_num'].values + prev_trial_max
+                    prev_trial_max = max(temp04.loc[:, 'trial_num'].values) + 1
+
+                    s04 = s04.append(temp04, ignore_index=True)
+                    s08 = s08.append(temp08, ignore_index=True)
+                    s13 = s13.append(temp13, ignore_index=True)
+
+        elif n_montages == 4:
+            for pm in constants.PAIRED_MONTAGES:
+                # Check whether we use the base montage for pre-training
+                if pm != montage:
+                    montages = [k for k, v in paired_montages.items()
+                                if v == pm]
+
+                    trial04 = pd.DataFrame()
+                    trial08 = pd.DataFrame()
+                    trial13 = pd.DataFrame()
+
+                    for montage_idx, m in enumerate(montages):
+                        temp04 = pd.read_parquet(os.path.join(
+                            data_dir, f'{subject}_{m}_4.parquet'))
+                        temp08 = pd.read_parquet(os.path.join(
+                            data_dir, f'{subject}_{m}_8.parquet'))
+                        temp13 = pd.read_parquet(os.path.join(
+                            data_dir, f'{subject}_{m}_13.parquet'))
+
+                        # Rename montages to have common columns
+                        columns = list(temp04.columns)
+                        for i, c in enumerate(columns):
+                            if 'ph_' not in c:
+                                continue
+                            splits = c.split('_')
+                            splits[1] = str(montage_idx)
+                            joined = '_'.join(splits)
+                            columns[i] = joined
+                        temp04.columns = columns
+                        temp08.columns = columns
+                        temp13.columns = columns
+
+                        # Add channels as new features
+                        trial04 = pd.concat([trial04, temp04], axis=1)
+                        trial08 = pd.concat([trial08, temp08], axis=1)
+                        trial13 = pd.concat([trial13, temp13], axis=1)
+
+                        # Remove duplicate columns
+                        trial04 = trial04.loc[:, ~trial04.columns.duplicated()]
+                        trial08 = trial08.loc[:, ~trial08.columns.duplicated()]
+                        trial13 = trial13.loc[:, ~trial13.columns.duplicated()]
+
+                    # Create unique trial numbers
+                    trial04.loc[:, 'trial_num'] = \
+                        trial04.loc[:, 'trial_num'].values + prev_trial_max
+                    trial08.loc[:, 'trial_num'] = \
+                        trial08.loc[:, 'trial_num'].values + prev_trial_max
+                    trial13.loc[:, 'trial_num'] = \
+                        trial13.loc[:, 'trial_num'].values + prev_trial_max
+                    prev_trial_max = max(
+                        trial04.loc[:, 'trial_num'].values) + 1
+
+                    s04 = s04.append(trial04, ignore_index=True)
+                    s08 = s08.append(trial08, ignore_index=True)
+                    s13 = s13.append(trial13, ignore_index=True)
 
         s04.columns = [f'{c}_04' for c in s04.columns]
         s08.columns = [f'{c}_08' for c in s08.columns]
@@ -207,6 +285,8 @@ class MontagePretrainData(FOSData):
 
         meta_cols = ['trial_num', 'subject_id', 'montage']
         chan_cols = [c for c in self.data.columns if 'ph_' in c]
+        assert ((len(chan_cols) == 3 * 256 and n_montages == 4) or
+                (len(chan_cols) == 3 * 128 and n_montages == 8))
         self.meta_data = self.data.loc[:, meta_cols]
         self.dynamic_table = self.data.loc[:, chan_cols + ['trial_num']]
         self.labels = self.data.groupby('trial_num').mean().reset_index()[
@@ -214,20 +294,6 @@ class MontagePretrainData(FOSData):
         self.labels.index.name = None
         self.labels = pd.DataFrame(self.labels,
                                    columns=['trial_num', 'trial_type'])
-
-        # Group montages in pairs based on trial num recorded (a-b, c-d, etc.)
-        if n_montages == 8:
-            pass
-        elif n_montages == 4:
-            columns = list(self.dynamic_table.columns)
-            for i, c in enumerate(columns):
-                if c == 'trial_num':
-                    continue
-                splits = c.split('_')
-                splits[1] = paired_montages[splits[1]]
-                joined = '_'.join(splits)
-                columns[i] = joined
-            self.dynamic_table.columns = columns
 
         # Filter channels with all zeros
         if filter_zeros:
@@ -339,7 +405,8 @@ class SubjectMontageDataset(Dataset):
                     test_size=(
                         self.proportions['valid'] /
                         (self.proportions['train'] +
-                         self.proportions['valid'])))
+                         self.proportions['valid'])),
+                    random_state=self.seed_cv)
             else:
                 sss_inner = StratifiedKFold(n_splits=self.cv, shuffle=True,
                                             random_state=self.seed_cv)
@@ -414,7 +481,9 @@ class DatasetBuilder:
         self.seed_cv = seed_cv
 
     def build_datasets(self, cv: int, nested_cv: int) -> Iterable[
-            Tuple[Iterable[Tuple[FOSData, FOSData]], FOSData]]:
+            Tuple[Iterable[
+                Tuple[SubjectMontageDataset, SubjectMontageDataset]],
+                SubjectMontageDataset]]:
         """
         Yields Datasets in the tuple form ((train, valid), test), where
         the inner tuple is iterated over for each cross-validation split.

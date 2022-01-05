@@ -4,39 +4,64 @@ from typing import Iterable, List, Tuple
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit
 from sklearn.preprocessing import maxabs_scale
 from torch.utils.data import Dataset
 
 from utils import combine_trial_types, constants
 
 
-class EROSData:
+class FOSData:
     """ Abstract class for optical imaging data. """
     def __init__(self):
         pass
 
 
-class SubjectMontageData(EROSData):
+class SubjectMontageData(FOSData):
     """
-    Creates a representation of the EROS data set that groups subjects' dynamic
+    Creates a representation of the FOS data set that groups subjects' dynamic
     data into a single tensor along with  their corresponding labels based on
     the classification task. Performs basic pre-processing to as specified by
     the input arguments.
     """
     def __init__(self, data_dir: str, subject: str, montage: str,
-                 classification_task: str, seq_len: int,
+                 classification_task: str, seq_len: int, n_montages: int,
                  filter_zeros: bool, average_chan: bool, max_abs_scale: bool):
 
         self.data_dir = data_dir
         self.seq_len = seq_len
 
-        s04 = pd.read_parquet(
-            os.path.join(data_dir, f'{subject}_{montage}_4.parquet'))
-        s08 = pd.read_parquet(
-            os.path.join(data_dir, f'{subject}_{montage}_8.parquet'))
-        s13 = pd.read_parquet(
-            os.path.join(data_dir, f'{subject}_{montage}_13.parquet'))
+        s04 = pd.DataFrame()
+        s08 = pd.DataFrame()
+        s13 = pd.DataFrame()
+
+        # Group montages in pairs based on trial num recorded (a-b, c-d, etc.)
+        if n_montages == 8:
+            montages = [montage]
+        elif n_montages == 4:
+            paired_montages = {'a': 'A', 'b': 'A',
+                               'c': 'B', 'd': 'B',
+                               'e': 'C', 'f': 'C',
+                               'g': 'D', 'h': 'D'}
+            montages = [k for k, v in paired_montages.items() if v == montage]
+
+        for m in montages:
+            temp04 = pd.read_parquet(
+                os.path.join(data_dir, f'{subject}_{m}_4.parquet'))
+            temp08 = pd.read_parquet(
+                os.path.join(data_dir, f'{subject}_{m}_8.parquet'))
+            temp13 = pd.read_parquet(
+                os.path.join(data_dir, f'{subject}_{m}_13.parquet'))
+
+            # Add channels as new features
+            s04 = pd.concat([s04, temp04], axis=1)
+            s08 = pd.concat([s08, temp08], axis=1)
+            s13 = pd.concat([s13, temp13], axis=1)
+
+            # Remove duplicate columns (i.e. trial_num, subject_id, etc.)
+            s04 = s04.loc[:, ~s04.columns.duplicated()]
+            s08 = s08.loc[:, ~s08.columns.duplicated()]
+            s13 = s13.loc[:, ~s13.columns.duplicated()]
 
         s04.columns = [f'{c}_04' for c in s04.columns]
         s08.columns = [f'{c}_08' for c in s08.columns]
@@ -57,6 +82,8 @@ class SubjectMontageData(EROSData):
 
         meta_cols = ['trial_num', 'subject_id', 'montage']
         chan_cols = [c for c in self.in_data.columns if 'ph_' in c]
+        assert ((len(chan_cols) == 3 * 256 and n_montages == 4) or
+                (len(chan_cols) == 3 * 128 and n_montages == 8))
         self.meta_data = self.in_data.loc[:, meta_cols]
         self.dynamic_table = self.in_data.loc[:, chan_cols + ['trial_num']]
         self.labels = self.in_data.groupby('trial_num').mean().reset_index()[
@@ -117,9 +144,9 @@ class SubjectMontageData(EROSData):
                 self.data[idx, :, :] = maxabs_scale(slice, axis=0)
 
 
-class MontagePretrainData(EROSData):
+class MontagePretrainData(FOSData):
     """
-    Creates a representation of the EROS data set that groups subjects' dynamic
+    Creates a representation of the FOS data set that groups subjects' dynamic
     data with their corresponding labels based on the classification task.
     Performs basic pre-processing to as specified by the input arguments.
 
@@ -127,7 +154,7 @@ class MontagePretrainData(EROSData):
     of interest is excluded from the data and all other montages are used.
     """
     def __init__(self, data_dir: str, subject: str, montage: str,
-                 classification_task: str, seq_len: int,
+                 classification_task: str, seq_len: int, n_montages: int,
                  filter_zeros: bool, average_chan: bool, max_abs_scale: bool):
 
         self.data_dir = data_dir
@@ -138,40 +165,103 @@ class MontagePretrainData(EROSData):
         s13 = pd.DataFrame()
 
         prev_trial_max = 0
-        for m in constants.MONTAGES:
-            if m != montage:
-                temp04 = pd.read_parquet(
-                    os.path.join(data_dir, f'{subject}_{m}_4.parquet'))
-                temp08 = pd.read_parquet(
-                    os.path.join(data_dir, f'{subject}_{m}_8.parquet'))
-                temp13 = pd.read_parquet(
-                    os.path.join(data_dir, f'{subject}_{m}_13.parquet'))
+        paired_montages = {'a': 'A', 'b': 'A',
+                           'c': 'B', 'd': 'B',
+                           'e': 'C', 'f': 'C',
+                           'g': 'D', 'h': 'D'}
 
-                temp04 = temp04.rename(
-                    {f'ph_{m}_{i}': f'ph_{i}' for i in range(128)},
-                    axis=1)
-                temp08 = temp08.rename(
-                    {f'ph_{m}_{i}': f'ph_{i}' for i in range(128)},
-                    axis=1)
-                temp13 = temp13.rename(
-                    {f'ph_{m}_{i}': f'ph_{i}' for i in range(128)},
-                    axis=1)
+        if n_montages == 8:
+            for m in constants.MONTAGES:
+                # Check whether we use the base montage for pre-training
+                if m != montage:
+                    temp04 = pd.read_parquet(
+                        os.path.join(data_dir, f'{subject}_{m}_4.parquet'))
+                    temp08 = pd.read_parquet(
+                        os.path.join(data_dir, f'{subject}_{m}_8.parquet'))
+                    temp13 = pd.read_parquet(
+                        os.path.join(data_dir, f'{subject}_{m}_13.parquet'))
 
-                # Create unique trial numbers
-                temp04.loc[:, 'trial_num'] = \
-                    temp04.loc[:, 'trial_num'].values + prev_trial_max
-                temp08.loc[:, 'trial_num'] = \
-                    temp08.loc[:, 'trial_num'].values + prev_trial_max
-                temp13.loc[:, 'trial_num'] = \
-                    temp13.loc[:, 'trial_num'].values + prev_trial_max
-                prev_trial_max = max(temp04.loc[:, 'trial_num'].values) + 1
+                    # Rename montages to have common columns
+                    columns = list(temp04.columns)
+                    for i, c in enumerate(columns):
+                        if 'ph_' not in c:
+                            continue
+                        splits = c.split('_')
+                        splits[1] = 'chan'
+                        joined = '_'.join(splits)
+                        columns[i] = joined
+                    temp04.columns = columns
+                    temp08.columns = columns
+                    temp13.columns = columns
 
-                s04 = s04.append(temp04, ignore_index=True)
-                s08 = s08.append(temp08, ignore_index=True)
-                s13 = s13.append(temp13, ignore_index=True)
-                print('unique', len(temp04['trial_num'].unique()),
-                      min(temp04['trial_num'].unique()),
-                      max(temp04['trial_num'].unique()), flush=True)
+                    # Create unique trial numbers
+                    temp04.loc[:, 'trial_num'] = \
+                        temp04.loc[:, 'trial_num'].values + prev_trial_max
+                    temp08.loc[:, 'trial_num'] = \
+                        temp08.loc[:, 'trial_num'].values + prev_trial_max
+                    temp13.loc[:, 'trial_num'] = \
+                        temp13.loc[:, 'trial_num'].values + prev_trial_max
+                    prev_trial_max = max(temp04.loc[:, 'trial_num'].values) + 1
+
+                    s04 = s04.append(temp04, ignore_index=True)
+                    s08 = s08.append(temp08, ignore_index=True)
+                    s13 = s13.append(temp13, ignore_index=True)
+
+        elif n_montages == 4:
+            for pm in constants.PAIRED_MONTAGES:
+                # Check whether we use the base montage for pre-training
+                if pm != montage:
+                    montages = [k for k, v in paired_montages.items()
+                                if v == pm]
+
+                    trial04 = pd.DataFrame()
+                    trial08 = pd.DataFrame()
+                    trial13 = pd.DataFrame()
+
+                    for montage_idx, m in enumerate(montages):
+                        temp04 = pd.read_parquet(os.path.join(
+                            data_dir, f'{subject}_{m}_4.parquet'))
+                        temp08 = pd.read_parquet(os.path.join(
+                            data_dir, f'{subject}_{m}_8.parquet'))
+                        temp13 = pd.read_parquet(os.path.join(
+                            data_dir, f'{subject}_{m}_13.parquet'))
+
+                        # Rename montages to have common columns
+                        columns = list(temp04.columns)
+                        for i, c in enumerate(columns):
+                            if 'ph_' not in c:
+                                continue
+                            splits = c.split('_')
+                            splits[1] = str(montage_idx)
+                            joined = '_'.join(splits)
+                            columns[i] = joined
+                        temp04.columns = columns
+                        temp08.columns = columns
+                        temp13.columns = columns
+
+                        # Add channels as new features
+                        trial04 = pd.concat([trial04, temp04], axis=1)
+                        trial08 = pd.concat([trial08, temp08], axis=1)
+                        trial13 = pd.concat([trial13, temp13], axis=1)
+
+                        # Remove duplicate columns
+                        trial04 = trial04.loc[:, ~trial04.columns.duplicated()]
+                        trial08 = trial08.loc[:, ~trial08.columns.duplicated()]
+                        trial13 = trial13.loc[:, ~trial13.columns.duplicated()]
+
+                    # Create unique trial numbers
+                    trial04.loc[:, 'trial_num'] = \
+                        trial04.loc[:, 'trial_num'].values + prev_trial_max
+                    trial08.loc[:, 'trial_num'] = \
+                        trial08.loc[:, 'trial_num'].values + prev_trial_max
+                    trial13.loc[:, 'trial_num'] = \
+                        trial13.loc[:, 'trial_num'].values + prev_trial_max
+                    prev_trial_max = max(
+                        trial04.loc[:, 'trial_num'].values) + 1
+
+                    s04 = s04.append(trial04, ignore_index=True)
+                    s08 = s08.append(trial08, ignore_index=True)
+                    s13 = s13.append(trial13, ignore_index=True)
 
         s04.columns = [f'{c}_04' for c in s04.columns]
         s08.columns = [f'{c}_08' for c in s08.columns]
@@ -192,6 +282,8 @@ class MontagePretrainData(EROSData):
 
         meta_cols = ['trial_num', 'subject_id', 'montage']
         chan_cols = [c for c in self.in_data.columns if 'ph_' in c]
+        assert ((len(chan_cols) == 3 * 256 and n_montages == 4) or
+                (len(chan_cols) == 3 * 128 and n_montages == 8))
         self.meta_data = self.in_data.loc[:, meta_cols]
         self.dynamic_table = self.in_data.loc[:, chan_cols + ['trial_num']]
         self.labels = self.in_data.groupby('trial_num').mean().reset_index()[
@@ -257,10 +349,10 @@ class SubjectMontageDataset(Dataset):
     Creates a PyTorch-loadable dataset that can be used for train/valid/test
     splits. Compatible with K-fold cross-validation and stratified splits.
     """
-    def __init__(self, data: EROSData, subset: str = None,
-                 seed: int = 42, props: Tuple[float] = (80, 10, 10),
+    def __init__(self, data: FOSData, subset: str = None,
+                 seed: int = 42, props: Tuple[float] = (70, 10, 20),
                  stratified: bool = False, cv: int = 1, nested_cv: int = 1,
-                 cv_idx: int = 0, nested_cv_idx: int = 0, seed_cv: int = 42):
+                 cv_idx: int = 0, nested_cv_idx: int = 0, seed_cv: int = 15):
         super().__init__()
 
         subsets = ['train', 'valid', 'test']
@@ -298,16 +390,19 @@ class SubjectMontageDataset(Dataset):
             learn_labels = self.labels[learn_idx]
 
             # train / valid split
-            sss_inner = StratifiedShuffleSplit(
-                n_splits=self.cv,
-                test_size=(
-                    self.proportions['valid'] / (self.proportions['train'] +
-                                                 self.proportions['valid'])),
-                random_state=self.seed_cv)
+            if self.cv == 1:
+                sss_inner = StratifiedShuffleSplit(
+                    n_splits=self.cv,
+                    test_size=(
+                        self.proportions['valid'] /
+                        (self.proportions['train'] +
+                         self.proportions['valid'])),
+                    random_state=self.seed_cv)
+            else:
+                sss_inner = StratifiedKFold(n_splits=self.cv, shuffle=True,
+                                            random_state=self.seed_cv)
             train_idx, valid_idx = list(
                 sss_inner.split(learn, learn_labels))[self.cv_idx]
-            train_idx = learn[train_idx]
-            valid_idx = learn[valid_idx]
 
             if self.subset == 'train':
                 self.idxs = list(train_idx)
@@ -366,13 +461,15 @@ class SubjectMontageDataset(Dataset):
 
 
 class DatasetBuilder:
-    def __init__(self, data: EROSData, seed: int = 42, seed_cv: int = 15):
+    def __init__(self, data: FOSData, seed: int = 42, seed_cv: int = 15):
         self.data = data
         self.seed = seed
         self.seed_cv = seed_cv
 
     def build_datasets(self, cv: int, nested_cv: int) -> Iterable[
-            Tuple[Iterable[Tuple[EROSData, EROSData]], EROSData]]:
+            Tuple[Iterable[
+                Tuple[SubjectMontageDataset, SubjectMontageDataset]],
+                SubjectMontageDataset]]:
         """
         Yields Datasets in the tuple form ((train, valid), test), where
         the inner tuple is iterated over for each cross-validation split.
@@ -384,21 +481,23 @@ class DatasetBuilder:
 
         # Iterate through possible test sets (typically just use one)
         for i in range(nested_cv):
-            def _inner_loop(data: EROSData, seed: int, seed_cv: seed):
+            def _inner_loop(data: FOSData, seed: int, seed_cv: seed):
                 # Iterate through cross-validation folds and yield train and
                 # valid Datasets
                 for j in range(cv):
-                    yield (EROSData(
-                        data=data, subset='train', stratified=True, cv=cv,
-                        nested_cv=nested_cv, cv_idx=j, nested_cv_idx=i,
-                        seed=seed, seed_cv=seed_cv),
-                           EROSData(
-                        data=data, subset='valid', stratified=True, cv=cv,
-                        nested_cv=nested_cv, cv_idx=j, nested_cv_idx=i,
-                        seed=seed, seed_cv=seed_cv))
+                    yield (SubjectMontageDataset(
+                                data=data, subset='train', stratified=True,
+                                cv=cv, nested_cv=nested_cv,
+                                cv_idx=j, nested_cv_idx=i,
+                                seed=seed, seed_cv=seed_cv),
+                           SubjectMontageDataset(
+                                data=data, subset='valid', stratified=True,
+                                cv=cv, nested_cv=nested_cv,
+                                cv_idx=j, nested_cv_idx=i,
+                                seed=seed, seed_cv=seed_cv))
 
             yield (_inner_loop(self.data, self.seed, self.seed_cv),
-                   EROSData(
+                   SubjectMontageDataset(
                        data=self.data, subset='test', stratified=True, cv=cv,
                        nested_cv=nested_cv, cv_idx=0, nested_cv_idx=i,
                        seed=seed, seed_cv=seed_cv))
