@@ -35,12 +35,12 @@ class NumpyEncoder(json.JSONEncoder):
 
 
 def load_architecture(device: torch.device, args: argparse.Namespace,
-                      input_features: int = 3, seq_len: int = 156):
+                      seq_len: int = 156):
     """
     Initializes a SAnD transformer model with the specified parameters and
     sends it to the device.
     """
-    model = SAnD(input_features, seq_len, n_heads=args.n_heads,
+    model = SAnD(args.input_features, seq_len, n_heads=args.n_heads,
                  factor=args.factor, n_layers=args.n_layers,
                  d_model=args.d_model, dropout_rate=args.dropout)
     model.to(device)

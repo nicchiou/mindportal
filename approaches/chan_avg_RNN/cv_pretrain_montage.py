@@ -50,7 +50,7 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
                     args.data_path),
                 subject, montage,
                 args.classification_task, args.n_montages,
-                args.filter_zeros, args.average_chan, args.max_abs_scale)
+                args.filter_zeros, args.pool_ops, args.max_abs_scale)
             train_dataset = SubjectMontageDataset(data=data, subset='train',
                                                   stratified=args.stratified,
                                                   seed=args.seed)
@@ -134,7 +134,7 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
                     args.data_path),
                 subject, montage,
                 args.classification_task, args.n_montages,
-                args.filter_zeros, args.average_chan, args.max_abs_scale)
+                args.filter_zeros, args.pool_ops, args.max_abs_scale)
 
             db = DatasetBuilder(data=data, seed=args.seed,
                                 seed_cv=args.seed_cv)
@@ -833,6 +833,19 @@ if __name__ == '__main__':
     parser.add_argument('--average_chan', action='store_true',
                         help='Average all input channels for each frequency '
                         'band before input into model.')
+    parser.add_argument('--median_chan', action='store_true',
+                        help='Take the median value of all input channels '
+                        'for each frequency band before input into model.')
+    parser.add_argument('--min_chan', action='store_true',
+                        help='Take the minimum value of all input channels '
+                        'for each frequency band before input into model.')
+    parser.add_argument('--max_chan', action='store_true',
+                        help='Take the maximum value of all input channels '
+                        'for each frequency band before input into model.')
+    parser.add_argument('--std_chan', action='store_true',
+                        help='Take the standard deviation across all input '
+                        'channels for each frequency band before input into '
+                        'model.')
     parser.add_argument('--max_abs_scale', action='store_true')
     parser.add_argument('--use_attention', action='store_true',
                         help='Use attention mechanisms for classification')
@@ -903,6 +916,11 @@ if __name__ == '__main__':
     parser.add_argument('--verbose', action='store_true')
     args = parser.parse_args()
     args.stratified = not args.no_stratified
+    args.pool_ops = {'mean': args.average_chan,
+                     'median': args.median_chan,
+                     'min': args.min_chan,
+                     'max': args.max_chan,
+                     'std': args.std_chan}
 
     # Set start method of multiprocessing library
     try:

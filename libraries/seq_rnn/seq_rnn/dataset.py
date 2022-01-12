@@ -25,7 +25,7 @@ class SubjectMontageData(FOSData):
     """
     def __init__(self, data_dir: str, subject: str, montage: str,
                  classification_task: str, n_montages: int,
-                 filter_zeros: bool, average_chan: bool, max_abs_scale: bool):
+                 filter_zeros: bool, pool_ops: dict, max_abs_scale: bool):
 
         self.data_dir = data_dir
 
@@ -93,19 +93,47 @@ class SubjectMontageData(FOSData):
         # Filter channels with all zeros
         if filter_zeros:
             self.dynamic_table.loc[:, (self.dynamic_table != 0).any(axis=0)]
-        # Average channels of the same frequency band
-        if average_chan:
-            self.dynamic_table['avg_04'] = self.dynamic_table[
-                [c for c in self.dynamic_table if '_04' in c and 'ph_' in c]
-                ].mean(axis=1)
-            self.dynamic_table['avg_08'] = self.dynamic_table[
-                [c for c in self.dynamic_table if '_08' in c and 'ph_' in c]
-                ].mean(axis=1)
-            self.dynamic_table['avg_13'] = self.dynamic_table[
-                [c for c in self.dynamic_table if '_13' in c and 'ph_' in c]
-                ].mean(axis=1)
+
+        # Perform pooling operations within frequency band
+        dynamic_cols = list()
+        if pool_ops['mean']:
+            prefix = 'avg'
+            for freq in ['04', '08', '13']:
+                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
+                    [c for c in self.dynamic_table
+                     if f'_{freq}' in c and 'ph_' in c]].mean(axis=1)
+                dynamic_cols.append(f'{prefix}_{freq}')
+        if pool_ops['median']:
+            prefix = 'med'
+            for freq in ['04', '08', '13']:
+                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
+                    [c for c in self.dynamic_table
+                     if f'_{freq}' in c and 'ph_' in c]].median(axis=1)
+                dynamic_cols.append(f'{prefix}_{freq}')
+        if pool_ops['min']:
+            prefix = 'min'
+            for freq in ['04', '08', '13']:
+                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
+                    [c for c in self.dynamic_table
+                     if f'_{freq}' in c and 'ph_' in c]].min(axis=1)
+                dynamic_cols.append(f'{prefix}_{freq}')
+        if pool_ops['max']:
+            prefix = 'max'
+            for freq in ['04', '08', '13']:
+                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
+                    [c for c in self.dynamic_table
+                     if f'_{freq}' in c and 'ph_' in c]].max(axis=1)
+                dynamic_cols.append(f'{prefix}_{freq}')
+        if pool_ops['std']:
+            prefix = 'std'
+            for freq in ['04', '08', '13']:
+                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
+                    [c for c in self.dynamic_table
+                     if f'_{freq}' in c and 'ph_' in c]].std(axis=1)
+                dynamic_cols.append(f'{prefix}_{freq}')
+        if True in pool_ops.values():
             self.dynamic_table = self.dynamic_table.loc[
-                :, ['avg_04', 'avg_08', 'avg_13'] + ['trial_num']]
+                :, dynamic_cols + ['trial_num']]
 
         # Combine trial types
         # Classify left versus right motor response
@@ -159,7 +187,7 @@ class MontagePretrainData(FOSData):
     """
     def __init__(self, data_dir: str, subject: str, montage: str,
                  classification_task: str, n_montages: int,
-                 filter_zeros: bool, average_chan: bool, max_abs_scale: bool):
+                 filter_zeros: bool, pool_ops: dict, max_abs_scale: bool):
 
         self.data_dir = data_dir
 
@@ -298,19 +326,47 @@ class MontagePretrainData(FOSData):
         # Filter channels with all zeros
         if filter_zeros:
             self.dynamic_table.loc[:, (self.dynamic_table != 0).any(axis=0)]
-        # Average channels of the same frequency band
-        if average_chan:
-            self.dynamic_table['avg_04'] = self.dynamic_table[
-                [c for c in self.dynamic_table if '_04' in c and 'ph_' in c]
-                ].mean(axis=1)
-            self.dynamic_table['avg_08'] = self.dynamic_table[
-                [c for c in self.dynamic_table if '_08' in c and 'ph_' in c]
-                ].mean(axis=1)
-            self.dynamic_table['avg_13'] = self.dynamic_table[
-                [c for c in self.dynamic_table if '_13' in c and 'ph_' in c]
-                ].mean(axis=1)
+
+        # Perform pooling operations within frequency band
+        dynamic_cols = list()
+        if pool_ops['mean']:
+            prefix = 'avg'
+            for freq in ['04', '08', '13']:
+                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
+                    [c for c in self.dynamic_table
+                     if f'_{freq}' in c and 'ph_' in c]].mean(axis=1)
+                dynamic_cols.append(f'{prefix}_{freq}')
+        if pool_ops['median']:
+            prefix = 'med'
+            for freq in ['04', '08', '13']:
+                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
+                    [c for c in self.dynamic_table
+                     if f'_{freq}' in c and 'ph_' in c]].median(axis=1)
+                dynamic_cols.append(f'{prefix}_{freq}')
+        if pool_ops['min']:
+            prefix = 'min'
+            for freq in ['04', '08', '13']:
+                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
+                    [c for c in self.dynamic_table
+                     if f'_{freq}' in c and 'ph_' in c]].min(axis=1)
+                dynamic_cols.append(f'{prefix}_{freq}')
+        if pool_ops['max']:
+            prefix = 'max'
+            for freq in ['04', '08', '13']:
+                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
+                    [c for c in self.dynamic_table
+                     if f'_{freq}' in c and 'ph_' in c]].max(axis=1)
+                dynamic_cols.append(f'{prefix}_{freq}')
+        if pool_ops['std']:
+            prefix = 'std'
+            for freq in ['04', '08', '13']:
+                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
+                    [c for c in self.dynamic_table
+                     if f'_{freq}' in c and 'ph_' in c]].std(axis=1)
+                dynamic_cols.append(f'{prefix}_{freq}')
+        if True in pool_ops.values():
             self.dynamic_table = self.dynamic_table.loc[
-                :, ['avg_04', 'avg_08', 'avg_13'] + ['trial_num']]
+                :, dynamic_cols + ['trial_num']]
 
         # Combine trial types
         # Classify left versus right motor response
