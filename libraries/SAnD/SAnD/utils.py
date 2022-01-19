@@ -34,13 +34,12 @@ class NumpyEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
-def load_architecture(device: torch.device, args: argparse.Namespace,
-                      seq_len: int = 156):
+def load_architecture(device: torch.device, args: argparse.Namespace):
     """
     Initializes a SAnD transformer model with the specified parameters and
     sends it to the device.
     """
-    model = SAnD(args.input_features, seq_len, n_heads=args.n_heads,
+    model = SAnD(args.input_features, args.seq_len, n_heads=args.n_heads,
                  factor=args.factor, n_layers=args.n_layers,
                  d_model=args.d_model, dropout_rate=args.dropout)
     model.to(device)
@@ -88,7 +87,8 @@ def evaluate(true: list, pred: list, prob: list):
 
 def save_predictions(subject_id: str, montage: str,
                      true: list, pred: list, prob: list,
-                     exp_dir: str, subset: str, checkpoint_suffix: str = ''):
+                     exp_dir: str, subset: str, checkpoint_suffix: str = '',
+                     final: bool = False):
     """
     Writes a DataFrame containing the predictions for a given cross-validation
     iteration, along with the true labels and probabilities (confidence).
@@ -107,6 +107,6 @@ def save_predictions(subject_id: str, montage: str,
     result_df.loc[:, 'cv_iter'] = cv_iter
 
     result_df.to_parquet(os.path.join(
-        exp_dir, 'predictions',
+        exp_dir, 'predictions' if not final else 'final_predictions',
         f'{subject_id}_{montage}_{subset}_{checkpoint_suffix}.parquet'),
         index=False)

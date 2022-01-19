@@ -26,7 +26,10 @@ class SubjectMontageData(FOSData):
     """
     def __init__(self, data_dir: str, subject: str, montage: str,
                  classification_task: str, seq_len: int, n_montages: int,
-                 filter_zeros: bool, pool_ops: bool, max_abs_scale: bool):
+                 pool_sep_montages: bool, filter_zeros: bool, pool_ops: bool,
+                 max_abs_scale: bool):
+
+        assert (pool_sep_montages and n_montages == 4) or not pool_sep_montages
 
         self.data_dir = data_dir
         self.seq_len = seq_len
@@ -98,41 +101,91 @@ class SubjectMontageData(FOSData):
 
         # Perform pooling operations within frequency band
         dynamic_cols = list()
-        if pool_ops['mean']:
-            prefix = 'avg'
+        if pool_sep_montages:
+            for m in montages:
+                for freq in ['04', '08', '13']:
+                    if pool_ops['mean']:
+                        prefix = 'avg'
+                        self.dynamic_table[f'{prefix}_{m}_{freq}'] = \
+                            self.dynamic_table[
+                                [c for c in self.dynamic_table
+                                 if f'_{freq}' in c and 'ph_' in c
+                                 and str(c.split('_')[1] == m)]
+                                ].mean(axis=1)
+                        dynamic_cols.append(f'{prefix}_{m}_{freq}')
+                    if pool_ops['median']:
+                        prefix = 'med'
+                        self.dynamic_table[f'{prefix}_{m}_{freq}'] = \
+                            self.dynamic_table[
+                                [c for c in self.dynamic_table
+                                 if f'_{freq}' in c and 'ph_' in c
+                                 and str(c.split('_')[1] == m)]
+                                ].median(axis=1)
+                        dynamic_cols.append(f'{prefix}_{m}_{freq}')
+                    if pool_ops['min']:
+                        prefix = 'min'
+                        self.dynamic_table[f'{prefix}_{m}_{freq}'] = \
+                            self.dynamic_table[
+                                [c for c in self.dynamic_table
+                                 if f'_{freq}' in c and 'ph_' in c
+                                 and str(c.split('_')[1] == m)]
+                                ].min(axis=1)
+                        dynamic_cols.append(f'{prefix}_{m}_{freq}')
+                    if pool_ops['max']:
+                        prefix = 'max'
+                        self.dynamic_table[f'{prefix}_{m}_{freq}'] = \
+                            self.dynamic_table[
+                                [c for c in self.dynamic_table
+                                 if f'_{freq}' in c and 'ph_' in c
+                                 and str(c.split('_')[1] == m)]
+                                ].max(axis=1)
+                        dynamic_cols.append(f'{prefix}_{m}_{freq}')
+                    if pool_ops['std']:
+                        prefix = 'std'
+                        self.dynamic_table[f'{prefix}_{m}_{freq}'] = \
+                            self.dynamic_table[
+                                [c for c in self.dynamic_table
+                                 if f'_{freq}' in c and 'ph_' in c
+                                 and str(c.split('_')[1] == m)]
+                                ].std(axis=1)
+                        dynamic_cols.append(f'{prefix}_{m}_{freq}')
+        else:
             for freq in ['04', '08', '13']:
-                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
-                    [c for c in self.dynamic_table
-                     if f'_{freq}' in c and 'ph_' in c]].mean(axis=1)
-                dynamic_cols.append(f'{prefix}_{freq}')
-        if pool_ops['median']:
-            prefix = 'med'
-            for freq in ['04', '08', '13']:
-                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
-                    [c for c in self.dynamic_table
-                     if f'_{freq}' in c and 'ph_' in c]].median(axis=1)
-                dynamic_cols.append(f'{prefix}_{freq}')
-        if pool_ops['min']:
-            prefix = 'min'
-            for freq in ['04', '08', '13']:
-                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
-                    [c for c in self.dynamic_table
-                     if f'_{freq}' in c and 'ph_' in c]].min(axis=1)
-                dynamic_cols.append(f'{prefix}_{freq}')
-        if pool_ops['max']:
-            prefix = 'max'
-            for freq in ['04', '08', '13']:
-                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
-                    [c for c in self.dynamic_table
-                     if f'_{freq}' in c and 'ph_' in c]].max(axis=1)
-                dynamic_cols.append(f'{prefix}_{freq}')
-        if pool_ops['std']:
-            prefix = 'std'
-            for freq in ['04', '08', '13']:
-                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
-                    [c for c in self.dynamic_table
-                     if f'_{freq}' in c and 'ph_' in c]].std(axis=1)
-                dynamic_cols.append(f'{prefix}_{freq}')
+                if pool_ops['mean']:
+                    prefix = 'avg'
+                    self.dynamic_table[f'{prefix}_{freq}'] = \
+                        self.dynamic_table[
+                            [c for c in self.dynamic_table
+                             if f'_{freq}' in c and 'ph_' in c]].mean(axis=1)
+                    dynamic_cols.append(f'{prefix}_{freq}')
+                if pool_ops['median']:
+                    prefix = 'med'
+                    self.dynamic_table[f'{prefix}_{freq}'] = \
+                        self.dynamic_table[
+                            [c for c in self.dynamic_table
+                             if f'_{freq}' in c and 'ph_' in c]].median(axis=1)
+                    dynamic_cols.append(f'{prefix}_{freq}')
+                if pool_ops['min']:
+                    prefix = 'min'
+                    self.dynamic_table[f'{prefix}_{freq}'] = \
+                        self.dynamic_table[
+                            [c for c in self.dynamic_table
+                             if f'_{freq}' in c and 'ph_' in c]].min(axis=1)
+                    dynamic_cols.append(f'{prefix}_{freq}')
+                if pool_ops['max']:
+                    prefix = 'max'
+                    self.dynamic_table[f'{prefix}_{freq}'] = \
+                        self.dynamic_table[
+                            [c for c in self.dynamic_table
+                             if f'_{freq}' in c and 'ph_' in c]].max(axis=1)
+                    dynamic_cols.append(f'{prefix}_{freq}')
+                if pool_ops['std']:
+                    prefix = 'std'
+                    self.dynamic_table[f'{prefix}_{freq}'] = \
+                        self.dynamic_table[
+                            [c for c in self.dynamic_table
+                             if f'_{freq}' in c and 'ph_' in c]].std(axis=1)
+                    dynamic_cols.append(f'{prefix}_{freq}')
         if True in pool_ops.values():
             self.dynamic_table = self.dynamic_table.loc[
                 :, dynamic_cols + ['trial_num']]
@@ -183,7 +236,10 @@ class MontagePretrainData(FOSData):
     """
     def __init__(self, data_dir: str, subject: str, montage: str,
                  classification_task: str, seq_len: int, n_montages: int,
-                 filter_zeros: bool, pool_ops: dict, max_abs_scale: bool):
+                 pool_sep_montages: bool, filter_zeros: bool, pool_ops: dict,
+                 max_abs_scale: bool):
+
+        assert (pool_sep_montages and n_montages == 4) or not pool_sep_montages
 
         self.data_dir = data_dir
         self.seq_len = seq_len
@@ -326,41 +382,91 @@ class MontagePretrainData(FOSData):
 
         # Perform pooling operations within frequency band
         dynamic_cols = list()
-        if pool_ops['mean']:
-            prefix = 'avg'
+        if pool_sep_montages:
+            for m in range(2):
+                for freq in ['04', '08', '13']:
+                    if pool_ops['mean']:
+                        prefix = 'avg'
+                        self.dynamic_table[f'{prefix}_{m}_{freq}'] = \
+                            self.dynamic_table[
+                                [c for c in self.dynamic_table
+                                 if f'_{freq}' in c and 'ph_' in c
+                                 and str(c.split('_')[1] == str(m))]
+                                ].mean(axis=1)
+                        dynamic_cols.append(f'{prefix}_{m}_{freq}')
+                    if pool_ops['median']:
+                        prefix = 'med'
+                        self.dynamic_table[f'{prefix}_{m}_{freq}'] = \
+                            self.dynamic_table[
+                                [c for c in self.dynamic_table
+                                 if f'_{freq}' in c and 'ph_' in c
+                                 and str(c.split('_')[1] == str(m))]
+                                ].median(axis=1)
+                        dynamic_cols.append(f'{prefix}_{m}_{freq}')
+                    if pool_ops['min']:
+                        prefix = 'min'
+                        self.dynamic_table[f'{prefix}_{m}_{freq}'] = \
+                            self.dynamic_table[
+                                [c for c in self.dynamic_table
+                                 if f'_{freq}' in c and 'ph_' in c
+                                 and str(c.split('_')[1] == str(m))]
+                                ].min(axis=1)
+                        dynamic_cols.append(f'{prefix}_{m}_{freq}')
+                    if pool_ops['max']:
+                        prefix = 'max'
+                        self.dynamic_table[f'{prefix}_{m}_{freq}'] = \
+                            self.dynamic_table[
+                                [c for c in self.dynamic_table
+                                 if f'_{freq}' in c and 'ph_' in c
+                                 and str(c.split('_')[1] == str(m))]
+                                ].max(axis=1)
+                        dynamic_cols.append(f'{prefix}_{m}_{freq}')
+                    if pool_ops['std']:
+                        prefix = 'std'
+                        self.dynamic_table[f'{prefix}_{m}_{freq}'] = \
+                            self.dynamic_table[
+                                [c for c in self.dynamic_table
+                                 if f'_{freq}' in c and 'ph_' in c
+                                 and str(c.split('_')[1] == str(m))]
+                                ].std(axis=1)
+                        dynamic_cols.append(f'{prefix}_{m}_{freq}')
+        else:
             for freq in ['04', '08', '13']:
-                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
-                    [c for c in self.dynamic_table
-                     if f'_{freq}' in c and 'ph_' in c]].mean(axis=1)
-                dynamic_cols.append(f'{prefix}_{freq}')
-        if pool_ops['median']:
-            prefix = 'med'
-            for freq in ['04', '08', '13']:
-                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
-                    [c for c in self.dynamic_table
-                     if f'_{freq}' in c and 'ph_' in c]].median(axis=1)
-                dynamic_cols.append(f'{prefix}_{freq}')
-        if pool_ops['min']:
-            prefix = 'min'
-            for freq in ['04', '08', '13']:
-                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
-                    [c for c in self.dynamic_table
-                     if f'_{freq}' in c and 'ph_' in c]].min(axis=1)
-                dynamic_cols.append(f'{prefix}_{freq}')
-        if pool_ops['max']:
-            prefix = 'max'
-            for freq in ['04', '08', '13']:
-                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
-                    [c for c in self.dynamic_table
-                     if f'_{freq}' in c and 'ph_' in c]].max(axis=1)
-                dynamic_cols.append(f'{prefix}_{freq}')
-        if pool_ops['std']:
-            prefix = 'std'
-            for freq in ['04', '08', '13']:
-                self.dynamic_table[f'{prefix}_{freq}'] = self.dynamic_table[
-                    [c for c in self.dynamic_table
-                     if f'_{freq}' in c and 'ph_' in c]].std(axis=1)
-                dynamic_cols.append(f'{prefix}_{freq}')
+                if pool_ops['mean']:
+                    prefix = 'avg'
+                    self.dynamic_table[f'{prefix}_{freq}'] = \
+                        self.dynamic_table[
+                            [c for c in self.dynamic_table
+                             if f'_{freq}' in c and 'ph_' in c]].mean(axis=1)
+                    dynamic_cols.append(f'{prefix}_{freq}')
+                if pool_ops['median']:
+                    prefix = 'med'
+                    self.dynamic_table[f'{prefix}_{freq}'] = \
+                        self.dynamic_table[
+                            [c for c in self.dynamic_table
+                             if f'_{freq}' in c and 'ph_' in c]].median(axis=1)
+                    dynamic_cols.append(f'{prefix}_{freq}')
+                if pool_ops['min']:
+                    prefix = 'min'
+                    self.dynamic_table[f'{prefix}_{freq}'] = \
+                        self.dynamic_table[
+                            [c for c in self.dynamic_table
+                             if f'_{freq}' in c and 'ph_' in c]].min(axis=1)
+                    dynamic_cols.append(f'{prefix}_{freq}')
+                if pool_ops['max']:
+                    prefix = 'max'
+                    self.dynamic_table[f'{prefix}_{freq}'] = \
+                        self.dynamic_table[
+                            [c for c in self.dynamic_table
+                             if f'_{freq}' in c and 'ph_' in c]].max(axis=1)
+                    dynamic_cols.append(f'{prefix}_{freq}')
+                if pool_ops['std']:
+                    prefix = 'std'
+                    self.dynamic_table[f'{prefix}_{freq}'] = \
+                        self.dynamic_table[
+                            [c for c in self.dynamic_table
+                             if f'_{freq}' in c and 'ph_' in c]].std(axis=1)
+                    dynamic_cols.append(f'{prefix}_{freq}')
         if True in pool_ops.values():
             self.dynamic_table = self.dynamic_table.loc[
                 :, dynamic_cols + ['trial_num']]

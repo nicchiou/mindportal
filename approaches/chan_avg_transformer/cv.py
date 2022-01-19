@@ -46,8 +46,9 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
                     'bandpass_only' if args.bandpass_only else 'rect_lowpass',
                     args.data_path),
                 subject, montage,
-                args.classification_task, 156, args.n_montages,
-                args.filter_zeros, args.pool_ops, args.max_abs_scale)
+                args.classification_task, args.seq_len, args.n_montages,
+                args.pool_sep_montages, args.filter_zeros,
+                args.pool_ops, args.max_abs_scale)
 
             db = DatasetBuilder(
                 data=data, seed=args.seed, seed_cv=args.seed_cv)
@@ -354,6 +355,51 @@ def train(subject: str, montage: str,
         print('Best valid loss: {:4f}'.format(best_valid_loss), flush=True)
         print(flush=True)
 
+    # ======== EVALUATE FINAL MODEL ON TRAINING SET ======== #
+    final_metrics_train = evaluate(true_train, pred_train, prob_train)
+    save_predictions(subject, montage,
+                     true_train, pred_train, prob_train,
+                     exp_dir, 'train', checkpoint_suffix, final=True)
+
+    # ======== EVALUTE FINAL MODEL ON VALIDATION SET ======== #
+    final_metrics_valid = evaluate(true_valid, pred_valid, prob_valid)
+    save_predictions(subject, montage,
+                     true_valid, pred_valid, prob_valid,
+                     exp_dir, 'valid', checkpoint_suffix, final=True)
+
+    # ======== EVALUTE FINAL MODEL ON TEST SET ======== #
+    model.eval()
+    running_loss_test = 0.0
+    total = 0.0
+    prob_test = list()
+    pred_test = list()
+    true_test = list()
+    with torch.no_grad():
+        for _, data, labels in test_loader:
+
+            total += labels.shape[0]
+            data = data.to(device) \
+                if isinstance(data, torch.Tensor) \
+                else [i.to(device) for i in data]
+            labels = labels.to(device)
+
+            outputs = model(data).squeeze()
+            probabilities = torch.sigmoid(outputs)
+            predicted = probabilities > 0.5
+            loss = criterion(outputs, labels)
+
+            prob_test.extend(probabilities.data.tolist())
+            pred_test.extend(predicted.data.tolist())
+            true_test.extend(labels.data.tolist())
+
+            running_loss_test += loss.item() * data.size(0)
+
+    final_metrics_test = evaluate(true_test, pred_test, prob_test)
+    loss_test_avg = running_loss_test / total
+    save_predictions(subject, montage, true_test, pred_test, prob_test,
+                     exp_dir, 'test', checkpoint_suffix, final=True)
+
+    # ======== LOAD BEST MODEL ======== #
     model = load_architecture(device, args)
     model.load_state_dict(copy.deepcopy(best_model.state_dict()))
     model.to(device)
@@ -419,6 +465,7 @@ def train(subject: str, montage: str,
     trial_results['valid_losses'] = valid_loss
     trial_results['valid_acc'] = valid_acc
     trial_results['final_test_loss'] = loss_test_avg
+    # Save metrics of model selected by best validation accuracy
     for metric, value in metrics_train.items():
         trial_results['train_' + metric] = value
     for metric, value in metrics_valid.items():
@@ -430,6 +477,13 @@ def train(subject: str, montage: str,
         trial_results['valid_' + metric] = value
     for metric, value in metrics_test.items():
         trial_results['test_' + metric] = value
+    # Save metrics of final model at early stopping
+    for metric, value in final_metrics_train.items():
+        trial_results['final_train_' + metric] = value
+    for metric, value in final_metrics_valid.items():
+        trial_results['final_valid_' + metric] = value
+    for metric, value in final_metrics_test.items():
+        trial_results['final_test_' + metric] = value
 
     return trial_results
 
@@ -464,8 +518,13 @@ if __name__ == '__main__':
     parser.add_argument('--bandpass_only', action='store_true',
                         help='indicates whether to use the signal that has '
                         'not been rectified nor low-pass filtered')
+    parser.add_argument('--seq_len', type=int, default=156)
     parser.add_argument('--filter_zeros', action='store_true',
                         help='Removes channels with all zeros from input.')
+    parser.add_argument('--pool_sep_montages', action='store_true',
+                        help='Specifies whether pooling operations should be '
+                        'applied over paired montages (false) or pool over '
+                        'separate montages.')
     parser.add_argument('--average_chan', action='store_true',
                         help='Average all input channels for each frequency '
                         'band before input into model.')
@@ -555,6 +614,7 @@ if __name__ == '__main__':
     os.makedirs(exp_dir, exist_ok=True)
     os.makedirs(os.path.join(exp_dir, 'checkpoints'), exist_ok=True)
     os.makedirs(os.path.join(exp_dir, 'predictions'), exist_ok=True)
+    os.makedirs(os.path.join(exp_dir, 'final_predictions'), exist_ok=True)
 
     # Initialize queue objects
     input_queue = multiprocessing.Queue()
@@ -573,6 +633,7 @@ if __name__ == '__main__':
         os.makedirs(exp_dir, exist_ok=True)
         os.makedirs(os.path.join(exp_dir, 'checkpoints'), exist_ok=True)
         os.makedirs(os.path.join(exp_dir, 'predictions'), exist_ok=True)
+        os.makedirs(os.path.join(exp_dir, 'final_predictions'), exist_ok=True)
         for montage in montage_list:
             input_queue.put((args.subject, montage))
     # Evaluate all subjects

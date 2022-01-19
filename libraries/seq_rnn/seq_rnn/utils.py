@@ -85,7 +85,8 @@ def evaluate(true: dict, pred: dict, prob: dict):
 
 def save_predictions(subject_id: str, montage: str,
                      true: dict, pred: dict, prob: dict,
-                     exp_dir: str, subset: str, checkpoint_suffix: str = ''):
+                     exp_dir: str, subset: str, checkpoint_suffix: str = '',
+                     final: bool = False):
     """
     Writes a DataFrame containing the predictions for a given cross-validation
     iteration, along with the true labels and probabilities (confidence).
@@ -109,7 +110,7 @@ def save_predictions(subject_id: str, montage: str,
     result_df.loc[:, 'cv_iter'] = cv_iter
 
     result_df.to_parquet(os.path.join(
-        exp_dir, 'predictions',
+        exp_dir, 'predictions' if not final else 'final_predictions',
         f'{subject_id}_{montage}_{subset}_{checkpoint_suffix}.parquet'),
         index=False)
 

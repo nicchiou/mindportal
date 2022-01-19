@@ -45,7 +45,7 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
                 'bandpass_only' if args.bandpass_only else 'rect_lowpass',
                 args.data_path),
             subject, montage,
-            args.classification_task, args.n_montages,
+            args.classification_task, args.n_montages, args.pool_sep_montages,
             args.filter_zeros, args.pool_ops, args.max_abs_scale)
 
         db = DatasetBuilder(data=data, seed=args.seed, seed_cv=args.seed_cv)
@@ -538,6 +538,120 @@ def train(subject: str, montage: str,
         last_models_list.pop()
         last_models_list.insert(0, copy.deepcopy(model))
 
+    # ======== EVALUATE FINAL MODEL ON TRAINING SET ======== #
+    final_metrics_train = evaluate(true_train, pred_train, prob_train)
+    save_predictions(subject, montage,
+                     true_train, pred_train, prob_train,
+                     exp_dir, 'train', checkpoint_suffix, final=True)
+
+    # ======== EVALUTE FINAL MODEL ON VALIDATION SET ======== #
+    final_metrics_valid = evaluate(true_valid, pred_valid, prob_valid)
+    save_predictions(subject, montage,
+                     true_valid, pred_valid, prob_valid,
+                     exp_dir, 'valid', checkpoint_suffix, final=True)
+
+    # ======== EVALUTE FINAL MODEL ON TEST SET ======== #
+    model.eval()
+    total = 0
+    prob_test = defaultdict(list)
+    pred_test = defaultdict(list)
+    true_test = defaultdict(list)
+    with torch.no_grad():
+        for data in test_loader:
+            _, dynamic_data, lengths, labels = \
+                data[0], data[1], data[2], data[3].to(device)
+            dynamic_data = pad_sequence(
+                dynamic_data, batch_first=True, padding_value=0).to(device)
+
+            effective_lengths = torch.ones(
+                dynamic_data.shape[0]).long()
+            c_lengths = torch.tensor(
+                list(range(dynamic_data.shape[1]))).long()
+            outputs = torch.zeros(dynamic_data.shape[0]).to(device)
+            hidden = model.init_hidden(dynamic_data.shape[0])
+            max_seq_len = dynamic_data.shape[1]
+            dynamic_data_history = torch.zeros(
+                len(data[0]), dynamic_data.shape[1], args.hidden_size
+                ).to(device)
+
+            for seq_step in range(max_seq_len):
+                step_events = dynamic_data[:, seq_step, :]
+                non_zero = (effective_lengths != 0).nonzero(
+                    as_tuple=False).squeeze()
+                lens = effective_lengths[non_zero]
+                events = step_events[non_zero]
+                if len(lens.shape) != 1:
+                    lens = lens.unsqueeze(dim=0)
+                    events = events.unsqueeze(dim=0)
+                events = events.unsqueeze(dim=1)
+
+                if args.arch != 'lstm':
+                    if len(non_zero.shape) == 0:
+                        (outputs[non_zero],
+                         hidden[:, non_zero:non_zero + 1, :],
+                         dynamic_data_event, _) = \
+                             model((events, lens, hidden,
+                                    dynamic_data_history), seq_step)
+                    else:
+                        (outputs[non_zero], hidden[:, non_zero, :],
+                         dynamic_data_event, _) = \
+                            model((events, lens, hidden,
+                                   dynamic_data_history), seq_step)
+                else:
+                    outputs[non_zero], h, dynamic_data_event, _ = \
+                        model((events, lens, hidden, dynamic_data_history),
+                              seq_step)
+                    if len(non_zero.shape) == 0:
+                        hidden[0][:, non_zero:non_zero + 1, :] = h[0]
+                        hidden[1][:, non_zero:non_zero + 1, :] = h[1]
+                    else:
+                        hidden[0][:, non_zero, :] = h[0]
+                        hidden[1][:, non_zero, :] = h[1]
+
+                # Store history of dynamic data hidden states; update count of
+                # samples for this time step
+                dynamic_data_history[:, seq_step, :] = dynamic_data_event
+                total += 1 if len(non_zero.shape) == 0 else len(non_zero)
+
+                probability = torch.sigmoid(outputs[non_zero]).clone().data
+                probability = probability.tolist()
+                if isinstance(probability, list):
+                    probability = probability
+                else:
+                    probability = [probability]
+                for prob in probability:
+                    prob_test[seq_step].append(prob)
+
+                # Pass logits through a sigmoid and compare to preset
+                # probability cutoff
+                predicted = (torch.sigmoid(
+                    outputs[non_zero]).clone().data >=
+                        args.logistic_threshold).long()
+                predicted = predicted.tolist()
+                if isinstance(predicted, list):
+                    predicted = predicted
+                else:
+                    predicted = [predicted]
+                for pred in predicted:
+                    pred_test[seq_step].append(pred)
+
+                true_labels = labels[non_zero].clone().data.tolist()
+                if isinstance(true_labels, list):
+                    true_labels = true_labels
+                else:
+                    true_labels = [true_labels]
+                for true in true_labels:
+                    true_test[seq_step].append(true)
+
+                # lengths (B x 1) --> select samples that still have time steps
+                # (time step < length of sequence)
+                effective_lengths = (c_lengths[seq_step] < lengths - 1).long()
+
+    final_metrics_test = evaluate(true_test, pred_test, prob_test)
+    save_predictions(subject, montage, true_test, pred_test, prob_test,
+                     exp_dir, 'test', checkpoint_suffix, final=True)
+
+    # ======== LOAD BEST MODEL ======== #
     model = load_architecture(device, args)
     model.load_state_dict(copy.deepcopy(best_model.state_dict()))
     model.to(device)
@@ -681,6 +795,7 @@ def train(subject: str, montage: str,
     trial_results['valid_losses'] = valid_loss
     trial_results['valid_acc'] = valid_acc
     trial_results['final_test_loss'] = final_test_loss
+    # Save metrics of model selected by best validation accuracy
     for metric, value in metrics_train.items():
         trial_results['train_' + metric] = value
     for metric, value in metrics_valid.items():
@@ -692,6 +807,13 @@ def train(subject: str, montage: str,
         trial_results['valid_' + metric] = value
     for metric, value in metrics_test.items():
         trial_results['test_' + metric] = value
+    # Save metrics of final model at early stopping
+    for metric, value in final_metrics_train.items():
+        trial_results['final_train_' + metric] = value
+    for metric, value in final_metrics_valid.items():
+        trial_results['final_valid_' + metric] = value
+    for metric, value in final_metrics_test.items():
+        trial_results['final_test_' + metric] = value
 
     return trial_results
 
@@ -729,6 +851,10 @@ if __name__ == '__main__':
     parser.add_argument('--filter_zeros', action='store_true',
                         help='Removes channels with all zeros across all '
                         'trials from input.')
+    parser.add_argument('--pool_sep_montages', action='store_true',
+                        help='Specifies whether pooling operations should be '
+                        'applied over paired montages (false) or pool over '
+                        'separate montages.')
     parser.add_argument('--average_chan', action='store_true',
                         help='Average all input channels for each frequency '
                         'band before input into model.')
@@ -840,6 +966,7 @@ if __name__ == '__main__':
     os.makedirs(exp_dir, exist_ok=True)
     os.makedirs(os.path.join(exp_dir, 'checkpoints'), exist_ok=True)
     os.makedirs(os.path.join(exp_dir, 'predictions'), exist_ok=True)
+    os.makedirs(os.path.join(exp_dir, 'final_predictions'), exist_ok=True)
 
     # Initialize queue objects
     input_queue = multiprocessing.Queue()
@@ -858,6 +985,7 @@ if __name__ == '__main__':
         os.makedirs(exp_dir, exist_ok=True)
         os.makedirs(os.path.join(exp_dir, 'checkpoints'), exist_ok=True)
         os.makedirs(os.path.join(exp_dir, 'predictions'), exist_ok=True)
+        os.makedirs(os.path.join(exp_dir, 'final_predictions'), exist_ok=True)
         for montage in montage_list:
             input_queue.put((args.subject, montage))
     # Evaluate all subjects
