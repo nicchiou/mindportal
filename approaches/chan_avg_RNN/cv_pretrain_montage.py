@@ -274,7 +274,6 @@ def train(subject: str, montage: str,
     best_valid_metrics['f1'] = -1
     best_valid_metrics['auc'] = -1
     best_valid_loss = 1e6
-    best_valid_metric = -1.0
     grad_norm = list()
     train_loss = list()
     train_acc = list()
@@ -594,13 +593,12 @@ def train(subject: str, montage: str,
         # Save the best model, using validation accuracy or f1-score as the
         # metric
         eps = 0.001
-        if metrics_valid[args.metric] > best_valid_metric and \
-                metrics_valid[args.metric] - best_valid_metric >= eps:
+        if loss_valid_avg < best_valid_loss and \
+                best_valid_loss - loss_valid_avg >= eps:
             # Reset early stopping epochs w/o improvement
             epochs_without_improvement = 0
             # Record best validation metrics
             best_valid_loss = loss_valid_avg
-            best_valid_metric = metrics_valid[args.metric]
             for metric, value in metrics_valid.items():
                 best_valid_metrics[metric] = value
             best_valid_metrics['loss'] = loss_valid_avg
@@ -982,7 +980,7 @@ if __name__ == '__main__':
     parser.add_argument('--arch', type=str, help='Architecture',
                         default='lstm')
     parser.add_argument('--epochs', type=int, help='Number of epochs',
-                        default=200)
+                        default=300)
     parser.add_argument('--lr', type=float, help='Learning Rate',
                         default=0.001)
     parser.add_argument('--optimizer', type=str, help='Optimizer',

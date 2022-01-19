@@ -266,7 +266,6 @@ def train(subject: str, montage: str,
     best_valid_metrics['f1'] = -1
     best_valid_metrics['auc'] = -1
     best_valid_loss = 1e6
-    best_valid_metric = -1.0
 
     for epoch in range(1, args.epochs + 1):
 
@@ -385,8 +384,8 @@ def train(subject: str, montage: str,
         # Save the best model at each epoch, using validation accuracy or
         # f1-score as the metric
         eps = 0.001
-        if metrics_valid[args.metric] > best_valid_metric and \
-                metrics_valid[args.metric] - best_valid_metric >= eps:
+        if epoch_loss_valid < best_valid_loss and \
+                best_valid_loss - epoch_loss_valid >= eps:
             # Reset early stopping epochs w/o improvement
             epochs_without_improvement = 0
             # Record best validation metrics
@@ -627,7 +626,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_abs_scale', action='store_true')
     parser.add_argument('--input_features', type=int, default=3)
     parser.add_argument('--epochs', type=int, help='Number of epochs',
-                        default=200)
+                        default=300)
     parser.add_argument('--lr', type=float, help='Learning Rate',
                         default=0.001)
     parser.add_argument('--n_warmup_steps', type=int, default=10)
