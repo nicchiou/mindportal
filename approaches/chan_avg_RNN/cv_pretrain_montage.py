@@ -285,7 +285,7 @@ def train(subject: str, montage: str,
     else:
         last_models_list = [None]
 
-    for _ in range(1, args.epochs):
+    for _ in range(1, args.epochs + 1):
 
         # ======== TRAIN ======== #
         model.train()
