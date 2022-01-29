@@ -5,4 +5,3 @@
 interactive.sub
 jobs/*
 !jobs/starter_scripts/
-!jobs/batch_job.sub
