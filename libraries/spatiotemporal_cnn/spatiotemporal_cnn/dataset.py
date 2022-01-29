@@ -8,7 +8,7 @@ from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit
 from sklearn.preprocessing import maxabs_scale
 from torch.utils.data import Dataset
 
-from utils import combine_trial_types
+from utils import combine_trial_types, constants
 
 
 class FOSData:
@@ -67,12 +67,16 @@ class SubjectMontageData(FOSData):
                                    columns=['trial_num', 'trial_type'])
 
         # Filter channels by dropping channels with all zeros across all trials
+        # (across train/valid/test splits)
         # Step 1: replace zeros with NaN
         # Step 2: drop columns with all NaN values
         if filter_zeros:
             self.dynamic_table.loc[:, chan_cols] = \
                 self.dynamic_table.loc[:, chan_cols].replace(0, np.nan)
             self.dynamic_table = self.dynamic_table.dropna(axis=1, how='all')
+        # How many viable channels remain?
+        viable_chan = [c for c in self.dynamic_table.columns if 'ph_' in c]
+        self.num_viable = len(viable_chan)
 
         # Combine trial types to get class labels
         # Classify left versus right motor response
@@ -109,6 +113,163 @@ class SubjectMontageData(FOSData):
         self.dynamic_table.loc[:, 'idx'] = self.dynamic_table.apply(
             lambda x: trial_idx_map[x.trial_num], axis=1)
         assert len(self.dynamic_table['trial_num'].unique()) == len(self.idxs)
+
+    def get_num_viable_channels(self):
+        return self.num_viable
+
+
+class MontagePretrainData(FOSData):
+    """
+    Creates a representation of the FOS data set that groups subjects' dynamic
+    data with their corresponding labels based on the classification task.
+    Performs basic pre-processing to as specified by the input arguments.
+
+    Functions identically to the SubjectMontageDataset, except the montage
+    of interest is excluded from the data and all other montages are used.
+    """
+    def __init__(self, data_dir: str, subject: str, montage: str,
+                 classification_task: str, n_montages: int,
+                 filter_zeros: bool = False):
+
+        self.data_dir = data_dir
+        self.data = pd.DataFrame()
+
+        prev_trial_max = 0
+        paired_montages = {'a': 'A', 'b': 'A',
+                           'c': 'B', 'd': 'B',
+                           'e': 'C', 'f': 'C',
+                           'g': 'D', 'h': 'D'}
+
+        if n_montages == 8:
+            for m in constants.MONTAGES:
+                # Check whether we use the base montage for pre-training
+                if m != montage:
+                    # Pandas DataFrame has format: timestep across trial
+                    # numbers (index), all possible channels + metadata
+                    # (columns)
+                    temp = pd.read_parquet(
+                        os.path.join(data_dir, f'{subject}_{m}_0.parquet'))
+
+                    # Rename montages to have common columns
+                    columns = list(temp.columns)
+                    for i, c in enumerate(columns):
+                        if 'ph_' not in c:
+                            continue
+                        splits = c.split('_')
+                        splits[1] = 'chan'
+                        joined = '_'.join(splits)
+                        columns[i] = joined
+                    temp.columns = columns
+
+                    # Create unique trial numbers
+                    temp.loc[:, 'trial_num'] = \
+                        temp.loc[:, 'trial_num'].values + prev_trial_max
+                    prev_trial_max = max(temp.loc[:, 'trial_num'].values) + 1
+
+                    self.data = self.data.append(temp, ignore_index=True)
+
+        elif n_montages == 4:
+            for pm in constants.PAIRED_MONTAGES:
+                # Check whether we use the base montage for pre-training
+                if pm != montage:
+                    montages = [k for k, v in paired_montages.items()
+                                if v == pm]
+
+                    trial = pd.DataFrame()
+
+                    for montage_idx, m in enumerate(montages):
+                        temp = pd.read_parquet(os.path.join(
+                            data_dir, f'{subject}_{m}_0.parquet'))
+
+                        # Rename montages to have common columns
+                        columns = list(temp.columns)
+                        for i, c in enumerate(columns):
+                            if 'ph_' not in c:
+                                continue
+                            splits = c.split('_')
+                            splits[1] = str(montage_idx)
+                            joined = '_'.join(splits)
+                            columns[i] = joined
+                        temp.columns = columns
+
+                        # Add channels as new features
+                        trial = pd.concat([trial, temp], axis=1)
+
+                        # Remove duplicate columns
+                        trial = trial.loc[:, ~trial.columns.duplicated()]
+
+                    # Create unique trial numbers
+                    trial.loc[:, 'trial_num'] = \
+                        trial.loc[:, 'trial_num'].values + prev_trial_max
+                    prev_trial_max = max(
+                        trial.loc[:, 'trial_num'].values) + 1
+
+                    self.data = self.data.append(trial, ignore_index=True)
+
+        # Separate DataFrame into metadata and dynamic phase data
+        meta_cols = ['trial_num', 'subject_id', 'montage']
+        chan_cols = [c for c in self.data.columns if 'ph_' in c]
+        assert ((len(chan_cols) == 256 and n_montages == 4) or
+                (len(chan_cols) == 128 and n_montages == 8))
+        self.meta_data = self.data.loc[:, meta_cols]
+        self.dynamic_table = self.data.loc[:, chan_cols + ['trial_num']]
+        # Labels correspond to the trial type of a specific trial number
+        self.labels = self.data.groupby('trial_num').mean().reset_index()[
+            ['trial_num', 'trial_type']]
+        self.labels.index.name = None
+        self.labels = pd.DataFrame(self.labels,
+                                   columns=['trial_num', 'trial_type'])
+
+        # Filter channels by dropping channels with all zeros across all trials
+        # (across train/valid/test splits)
+        # Step 1: replace zeros with NaN
+        # Step 2: drop columns with all NaN values
+        if filter_zeros:
+            self.dynamic_table.loc[:, chan_cols] = \
+                self.dynamic_table.loc[:, chan_cols].replace(0, np.nan)
+            self.dynamic_table = self.dynamic_table.dropna(axis=1, how='all')
+        # How many viable channels remain?
+        viable_chan = [c for c in self.dynamic_table.columns if 'ph_' in c]
+        self.num_viable = len(viable_chan)
+
+        # Combine trial types to get class labels
+        # Classify left versus right motor response
+        if classification_task == 'motor_LR':
+            func = combine_trial_types.combine_motor_LR
+            self.classes = 2
+        # Classify stimulus modality and motor response
+        elif classification_task == 'stim_motor':
+            func = combine_trial_types.stim_modality_motor_LR_labels
+            self.classes = 4
+        # Classify response modality, stimulus modality, and response
+        # polarity
+        elif classification_task == 'response_stim':
+            func = combine_trial_types.sresponse_stim_modality_labels
+            self.classes = 8
+        else:
+            raise NotImplementedError('Classification task not supported')
+        self.labels['trial_type'] = self.labels['trial_type'].apply(func)
+        self.labels.rename({'trial_type': 'label'}, axis=1, inplace=True)
+        self.labels = self.labels.dropna(
+            axis=0, subset=['label']).copy().reset_index(drop=True)
+
+        # NumPy arrays of trial_num, labels, and indices
+        self.trial_id = self.labels.loc[:, 'trial_num'].unique()
+        self.labels = self.labels.loc[:, 'label'].values.astype(np.float32)
+        self.idxs = list(range(len(self.labels)))
+
+        # Dynamic table is a DataFrame containing trials present for the
+        # specified trial type - assign corresponding idxs to match trial_id
+        self.dynamic_table = self.dynamic_table.loc[
+            self.dynamic_table['trial_num'].isin(self.trial_id), :
+            ].reset_index(drop=True)
+        trial_idx_map = dict(zip(self.trial_id, self.idxs))
+        self.dynamic_table.loc[:, 'idx'] = self.dynamic_table.apply(
+            lambda x: trial_idx_map[x.trial_num], axis=1)
+        assert len(self.dynamic_table['trial_num'].unique()) == len(self.idxs)
+
+    def get_num_viable_channels(self):
+        return self.num_viable
 
 
 class SubjectMontageDataset(Dataset):
@@ -210,19 +371,19 @@ class SubjectMontageDataset(Dataset):
         for col in self.nan_cols:
             # Subset of columns
             subset = self.dynamic_table.loc[:, [col, 'trial_num']]
-            if preprocessing['imputed signal'] is not None:
+            if preprocessing['imputed_signal'] is not None:
                 # Use pre-calculated imputed signal on training set to imput
                 for trial in subset.trial_num.unique():
                     subset_subset = subset.loc[subset['trial_num'] == trial, :]
                     if np.isnan(subset_subset[col].values[0]):
                         idxs_to_replace = subset_subset.index
                         imputed_df.loc[idxs_to_replace, col] = \
-                            preprocessing['imputed signal']
+                            preprocessing['imputed_signal']
 
             elif preprocessing['impute'] == 'zero':
                 imputed_df.loc[:, col] = subset.fillna(value=0.0)
                 if self.subset == 'train':
-                    preprocessing['imputed signal'] = np.zeros((
+                    preprocessing['imputed_signal'] = np.zeros((
                         imputed_df.loc[:, col].shape[0] //
                         len(subset.trial_num.unique())))
 
@@ -236,7 +397,7 @@ class SubjectMontageDataset(Dataset):
                 running_sig = np.vstack(running_sig).T
                 mean_sig = np.nanmean(running_sig, axis=1)
                 if self.subset == 'train':
-                    preprocessing['imputed signal'] = mean_sig
+                    preprocessing['imputed_signal'] = mean_sig
                 # Impute with mean signal
                 for trial in subset.trial_num.unique():
                     subset_subset = subset.loc[subset['trial_num'] == trial, :]
@@ -262,7 +423,7 @@ class SubjectMontageDataset(Dataset):
                 rand_sig = subset_subset.loc[:, col].values
                 assert not np.isnan(rand_sig[0])
                 if self.subset == 'train':
-                    preprocessing['imputed signal'] = rand_sig
+                    preprocessing['imputed_signal'] = rand_sig
                 # Impute with random signal
                 for trial in subset.trial_num.unique():
                     subset_subset = subset.loc[subset['trial_num'] == trial, :]
@@ -310,7 +471,7 @@ class SubjectMontageDataset(Dataset):
 
     def get_imputation(self):
         assert self.subset == 'train'
-        return self.preprocessing['imputed signal']
+        return self.preprocessing['imputed_signal']
 
     def get_label(self, idx):
         return self.__getitem__(idx)[2]
@@ -326,7 +487,7 @@ class DatasetBuilder:
         self.seed = seed
         self.seed_cv = seed_cv
         self.preprocessing = preprocessing
-        self.preprocessing['imputed signal'] = None
+        self.preprocessing['imputed_signal'] = None
 
     def build_datasets(self, cv: int, nested_cv: int) -> Iterable[
             Tuple[Iterable[Tuple[FOSData, FOSData]], FOSData]]:
@@ -349,7 +510,7 @@ class DatasetBuilder:
                         data=data, subset='train', stratified=True,
                         cv=cv, nested_cv=nested_cv, cv_idx=j, nested_cv_idx=i,
                         seed=seed, seed_cv=seed_cv, **self.preprocessing)
-                    self.preprocessing['imputed signal'] = \
+                    self.preprocessing['imputed_signal'] = \
                         train_dataset.get_imputation()
                     valid_dataset = SubjectMontageDataset(
                         data=data, subset='valid', stratified=True,

@@ -14,15 +14,16 @@ import numpy as np
 import pandas as pd
 import torch
 from sklearn.metrics import roc_auc_score
+from spatiotemporal_cnn.dataset import (DatasetBuilder, MontagePretrainData,
+                                        SubjectMontageData,
+                                        SubjectMontageDataset)
+from spatiotemporal_cnn.models import load_architecture
+from spatiotemporal_cnn.utils import deterministic, evaluate, save_predictions
 from torch.utils.data import DataLoader
+from torchsampler import ImbalancedDatasetSampler
 from tqdm import tqdm
 # (https://github.com/ufoym/imbalanced-dataset-sampler)
 from utils import constants
-
-from spatiotemporal_cnn.dataset import DatasetBuilder, SubjectMontageData
-from spatiotemporal_cnn.utils import (deterministic, evaluate,
-                                      save_predictions)
-from spatiotemporal_cnn.models import load_architecture
 
 
 def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
@@ -36,6 +37,82 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
         while not input_queue.empty():
             subject, montage = input_queue.get()
 
+            # ========== PRE-TRAINING PHASE ========== #
+            deterministic(args.train_seed)
+
+            # Set up Datasets and DataLoaders for pre-training
+            data = MontagePretrainData(
+                os.path.join(
+                    constants.SUBJECTS_DIR,
+                    args.anchor, 'bandpass_only', args.data_path),
+                subject, montage,
+                args.classification_task, args.n_montages, args.filter_zeros)
+            train_dataset = SubjectMontageDataset(
+                data=data, subset='train', stratified=args.stratified,
+                seed=args.train_seed, impute=args.imputation_method,
+                imputed_signal=None, max_abs_scale=args.max_abs_scale)
+            valid_dataset = SubjectMontageDataset(
+                data=data, subset='valid', stratified=args.stratified,
+                seed=args.train_seed, impute=args.imputation_method,
+                imputed_signal=None, max_abs_scale=args.max_abs_scale)
+            test_dataset = SubjectMontageDataset(
+                data=data, subset='test', stratified=args.stratified,
+                seed=args.train_seed, impute=args.imputation_method,
+                imputed_signal=None, max_abs_scale=args.max_abs_scale)
+
+            if args.use_imbalanced:
+                train_loader = DataLoader(
+                    train_dataset, batch_size=args.batch_size,
+                    sampler=ImbalancedDatasetSampler(train_dataset))
+            else:
+                train_loader = DataLoader(
+                    train_dataset, batch_size=args.batch_size, shuffle=True)
+            valid_loader = DataLoader(
+                valid_dataset, batch_size=args.batch_size, shuffle=False)
+            test_loader = DataLoader(
+                test_dataset, batch_size=args.batch_size, shuffle=False)
+
+            # Initialize PyTorch model with specified arguments and load to
+            # device
+            model = load_architecture(device, args)
+
+            # Initialize optimizer
+            if args.optimizer == 'Adam':
+                optimizer = torch.optim.Adam(
+                    model.parameters(), lr=args.pt_lr,
+                    weight_decay=args.weight_decay)
+            elif args.optimizer == 'SGD':
+                optimizer = torch.optim.SGD(
+                    model.parameters(), lr=args.pt_lr,
+                    weight_decay=args.weight_decay, momentum=0.9)
+            elif args.optimizer == 'RMSprop':
+                optimizer = torch.optim.RMSprop(
+                    model.parameters(), lr=args.pt_lr,
+                    weight_decay=args.weight_decay, momentum=0.9)
+            else:
+                raise NotImplementedError('Optimizer not implemented')
+
+            # Initialize criterion (binary)
+            if args.criterion == 'bce':
+                criterion = torch.nn.BCELoss()
+            elif args.criterion == 'bce_logits':
+                label_count = Counter(train_dataset.labels)
+                pos_weight = torch.Tensor(
+                    [label_count[0] / label_count[1]]).to(device)
+                criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+            else:
+                raise NotImplementedError('Criterion not implemented')
+
+            # Train
+            trial_results = train(
+                subject, montage,
+                args, train_loader, valid_loader, test_loader, optimizer,
+                criterion, model, device, exp_dir,
+                checkpoint_suffix=f'{subject}_{montage}_pretrain')
+            trial_results = {f'pretrain_{key}': value
+                             for key, value in trial_results.items()}
+
+            # ========== FINE-TUNING PHASE ========== #
             deterministic(args.train_seed)
 
             # Set up Datasets and DataLoaders
@@ -56,7 +133,6 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             results = pd.DataFrame(columns=['cv_iter'])
 
             # Start with the same model initial state
-            model = load_architecture(device, args)
             initialized_parameters = copy.deepcopy(model.state_dict())
 
             for i, (inner_train_valids, test_dataset) in enumerate(
@@ -93,15 +169,15 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
                     # Initialize optimizer
                     if args.optimizer == 'Adam':
                         optimizer = torch.optim.Adam(
-                            model.parameters(), lr=args.lr,
+                            model.parameters(), lr=args.ft_lr,
                             weight_decay=args.weight_decay)
                     elif args.optimizer == 'SGD':
                         optimizer = torch.optim.SGD(
-                            model.parameters(), lr=args.lr,
+                            model.parameters(), lr=args.ft_lr,
                             weight_decay=args.weight_decay, momentum=0.9)
                     elif args.optimizer == 'RMSprop':
                         optimizer = torch.optim.RMSprop(
-                            model.parameters(), lr=args.lr,
+                            model.parameters(), lr=args.ft_lr,
                             weight_decay=args.weight_decay, momentum=0.9)
                     else:
                         raise NotImplementedError('Optimizer not implemented')
@@ -121,15 +197,17 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
                     # Train for one iteration
                     model.load_state_dict(
                         copy.deepcopy(initialized_parameters))
-                    trial_results = train(
+                    iter_results = copy.deepcopy(trial_results)
+                    fine_tune_results = train(
                         subject, montage,
                         args, train_loader, valid_loader, test_loader,
                         optimizer, criterion, model, device, exp_dir,
                         checkpoint_suffix=checkpoint_suffix)
-                    trial_results['cv_iter'] = int(checkpoint_suffix) \
+                    iter_results.update(fine_tune_results)
+                    iter_results['cv_iter'] = int(checkpoint_suffix) \
                         if checkpoint_suffix.isdigit() else checkpoint_suffix
-                    trial_results['Status'] = 'PASS'
-                    results = results.append(trial_results, ignore_index=True)
+                    iter_results['Status'] = 'PASS'
+                    results = results.append(iter_results, ignore_index=True)
 
             output_queue.put(results)
             del model
@@ -519,8 +597,10 @@ if __name__ == '__main__':
                         choices=['zero'])
     parser.add_argument('--epochs', type=int, help='Number of epochs',
                         default=300)
-    parser.add_argument('--lr', type=float, help='Learning Rate',
-                        default=0.001)
+    parser.add_argument('--pt_lr', type=float, help='Pre-training learning '
+                        'rate', default=0.001)
+    parser.add_argument('--ft_lr', type=float, help='Fine-tuning learning '
+                        'rate', default=0.0001)
     parser.add_argument('--optimizer', type=str, help='Optimizer',
                         default='Adam')
     parser.add_argument('--batch_size', type=int, help='Mini-batch size',
