@@ -574,6 +574,8 @@ class SubjectMontageDataset(Dataset):
                                             random_state=self.seed_cv)
             train_idx, valid_idx = list(
                 sss_inner.split(learn, learn_labels))[self.cv_idx]
+            train_idx = learn[train_idx]
+            valid_idx = learn[valid_idx]
 
             if self.subset == 'train':
                 self.idxs = list(train_idx)
