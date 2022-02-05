@@ -224,7 +224,7 @@ def train(subject: str, montage: str,
           valid_loader: DataLoader, test_loader: DataLoader,
           optimizer: torch.optim, criterion: torch.nn.Module,
           model: torch.nn.Module, device, exp_dir: str,
-          checkpoint_suffix: str = ''):
+          checkpoint_suffix: str = '', pretrain: bool = False):
     """
     Performs one iteration of training for the specified number of epochs
     (with early stopping if used).
@@ -419,6 +419,7 @@ def train(subject: str, montage: str,
             print(flush=True)
 
     time_elapsed = time.time() - start_time
+    final_model = copy.deepcopy(model)
     if args.verbose:
         print('Training complete in {:.0f}m {:.0f}s'.format(
             time_elapsed // 60, time_elapsed % 60), flush=True)
@@ -527,6 +528,12 @@ def train(subject: str, montage: str,
     loss_test_avg = running_loss_test / total
     save_predictions(subject, montage, true_test, pred_test, prob_test,
                      exp_dir, 'test', checkpoint_suffix)
+
+    if not pretrain:
+        # ======== LOAD FINAL MODEL ======== #
+        model = load_architecture(device, args)
+        model.load_state_dict(copy.deepcopy(final_model.state_dict()))
+        model.to(device)
 
     # ======== SUMMARY ======== #
     trial_results['subject'] = subject

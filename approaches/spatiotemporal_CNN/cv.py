@@ -57,6 +57,10 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
 
             # Start with the same model initial state
             model = load_architecture(device, args)
+            model_parameters = filter(
+                lambda p: p.requires_grad, model.parameters())
+            params = sum([np.prod(p.size()) for p in model_parameters])
+            print(f'{params} trainable parameters', flush=True)
             initialized_parameters = copy.deepcopy(model.state_dict())
 
             for i, (inner_train_valids, test_dataset) in enumerate(
