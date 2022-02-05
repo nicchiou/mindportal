@@ -328,7 +328,8 @@ class SubjectMontageDataset(Dataset):
                     test_size=(
                         self.proportions['valid'] /
                         (self.proportions['train'] +
-                         self.proportions['valid'])))
+                         self.proportions['valid'])),
+                    random_state=self.seed_cv)
             else:
                 sss_inner = StratifiedKFold(n_splits=self.cv, shuffle=True,
                                             random_state=self.seed_cv)
