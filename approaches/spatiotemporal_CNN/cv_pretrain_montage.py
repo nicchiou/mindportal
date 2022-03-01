@@ -43,22 +43,27 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             # Set up Datasets and DataLoaders for pre-training
             data = MontagePretrainData(
                 os.path.join(
-                    constants.SUBJECTS_DIR,
-                    args.anchor, 'bandpass_only', args.data_path),
+                    constants.SUBJECTS_DIR, args.anchor, args.data_path),
                 subject, montage,
                 args.classification_task, args.n_montages, args.filter_zeros)
+            # Get number of input channels
+            args.num_channels = data.get_num_viable_channels()
+
             train_dataset = SubjectMontageDataset(
                 data=data, subset='train', stratified=args.stratified,
                 seed=args.train_seed, impute=args.imputation_method,
-                imputed_signal=None, max_abs_scale=args.max_abs_scale)
+                max_abs_scale=args.max_abs_scale)
             valid_dataset = SubjectMontageDataset(
                 data=data, subset='valid', stratified=args.stratified,
                 seed=args.train_seed, impute=args.imputation_method,
-                imputed_signal=None, max_abs_scale=args.max_abs_scale)
+                max_abs_scale=args.max_abs_scale)
             test_dataset = SubjectMontageDataset(
                 data=data, subset='test', stratified=args.stratified,
                 seed=args.train_seed, impute=args.imputation_method,
-                imputed_signal=None, max_abs_scale=args.max_abs_scale)
+                max_abs_scale=args.max_abs_scale)
+
+            valid_dataset.impute_chan(train_dataset)
+            test_dataset.impute_chan(train_dataset)
 
             if args.use_imbalanced:
                 train_loader = DataLoader(
@@ -118,8 +123,7 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             # Set up Datasets and DataLoaders
             data = SubjectMontageData(
                 os.path.join(
-                    constants.SUBJECTS_DIR,
-                    args.anchor, 'bandpass_only', args.data_path),
+                    constants.SUBJECTS_DIR, args.anchor, args.data_path),
                 subject, montage,
                 args.classification_task, args.n_montages, args.filter_zeros)
             # Get number of input channels
@@ -138,16 +142,21 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             for i, (inner_train_valids, test_dataset) in enumerate(
                     db.build_datasets(cv=args.cross_val,
                                       nested_cv=args.nested_cross_val)):
-                test_loader = DataLoader(
-                    test_dataset, batch_size=args.batch_size, shuffle=False)
 
                 for j, (train_dataset, valid_dataset) in enumerate(
                         inner_train_valids):
+
+                    valid_dataset.impute_chan(train_dataset)
+                    test_dataset.impute_chan(train_dataset)
+
                     train_loader = DataLoader(
                         train_dataset, batch_size=args.batch_size,
                         shuffle=True)
                     valid_loader = DataLoader(
                         valid_dataset, batch_size=args.batch_size,
+                        shuffle=False)
+                    test_loader = DataLoader(
+                        test_dataset, batch_size=args.batch_size,
                         shuffle=False)
 
                     if args.nested_cross_val > 1 and args.cross_val > 1:
@@ -588,12 +597,17 @@ if __name__ == '__main__':
                         'stim_motor (stimulus modality and motor response) '
                         'and response_stim (response modality, stimulus '
                         'modality, and response polarity).')
-    parser.add_argument('--anchor', type=str, default='pc',
-                        help='pre-cue (pc) or response stimulus (rs)')
+    parser.add_argument('--anchor', type=str, default='rl',
+                        choices=['pc', 'rs', 'rl'])
+    parser.add_argument('--voxel_space', action='store_true',
+                        help='specifies whether inputs are in channel-space '
+                        'or voxel-space.')
     parser.add_argument('--n_montages', type=int, default=4,
                         help='number of montages to consider based on '
                         'grouped montages; options include 8 (a-h) or 4 '
                         '(grouped by trial)')
+    parser.add_argument('--arch', type=str, default='spatiotemporal_cnn',
+                        choices=['spatiotemporal_cnn', 'fcn'])
     parser.add_argument('--fs', type=int, default=40,
                         help='Sampling frequency of the data')
     parser.add_argument('--filter_zeros', action='store_true',
@@ -601,7 +615,7 @@ if __name__ == '__main__':
     parser.add_argument('--seq_len', type=int, default=156)
     parser.add_argument('--max_abs_scale', action='store_true')
     parser.add_argument('--imputation_method', type=str, default='zero',
-                        choices=['zero'])
+                        choices=['zero', 'mean', 'random'])
     parser.add_argument('--epochs', type=int, help='Number of epochs',
                         default=300)
     parser.add_argument('--pt_lr', type=float, help='Pre-training learning '
@@ -624,6 +638,9 @@ if __name__ == '__main__':
                         help='Number of input channels to the model')
     parser.add_argument('--num_temporal_filters', type=int, default=12,
                         help='Number of temporal/frequency filters')
+    parser.add_argument('--num_depthwise_channels', type=int, default=48,
+                        help='Number of channels to compute depthwise '
+                        'convolutions over for variable input dimension')
     parser.add_argument('--num_spatial_filters', type=int, default=8,
                         help='Number of spatial filters per temporal filter')
     parser.add_argument('--num_pointwise_filters', type=int, default=96,

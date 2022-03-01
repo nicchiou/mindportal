@@ -42,9 +42,11 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             data = SubjectMontageData(
                 os.path.join(
                     constants.SUBJECTS_DIR,
-                    args.anchor, 'bandpass_only', args.data_path),
+                    'voxel_space' if args.voxel_space else 'channel_space',
+                    args.anchor, args.preprocessing_dir, args.data_path),
                 subject, montage,
-                args.classification_task, args.n_montages, args.filter_zeros)
+                args.classification_task, args.n_montages, args.filter_zeros,
+                args.voxel_space)
             # Get number of input channels
             args.num_channels = data.get_num_viable_channels()
 
@@ -66,16 +68,21 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             for i, (inner_train_valids, test_dataset) in enumerate(
                     db.build_datasets(cv=args.cross_val,
                                       nested_cv=args.nested_cross_val)):
-                test_loader = DataLoader(
-                    test_dataset, batch_size=args.batch_size, shuffle=False)
 
                 for j, (train_dataset, valid_dataset) in enumerate(
                         inner_train_valids):
+
+                    valid_dataset.impute_chan(train_dataset)
+                    test_dataset.impute_chan(train_dataset)
+
                     train_loader = DataLoader(
                         train_dataset, batch_size=args.batch_size,
                         shuffle=True)
                     valid_loader = DataLoader(
                         valid_dataset, batch_size=args.batch_size,
+                        shuffle=False)
+                    test_loader = DataLoader(
+                        test_dataset, batch_size=args.batch_size,
                         shuffle=False)
 
                     if args.nested_cross_val > 1 and args.cross_val > 1:
@@ -507,12 +514,21 @@ if __name__ == '__main__':
                         'stim_motor (stimulus modality and motor response) '
                         'and response_stim (response modality, stimulus '
                         'modality, and response polarity).')
-    parser.add_argument('--anchor', type=str, default='pc',
-                        help='pre-cue (pc) or response stimulus (rs)')
+    parser.add_argument('--anchor', type=str, default='rl',
+                        choices=['pc', 'rs', 'rl'])
+    parser.add_argument('--preprocessing_dir', type=str,
+                        default='no_bandpass',
+                        choices=['bandpass_only', 'rect_lowpass',
+                                 'no_bandpass'])
+    parser.add_argument('--voxel_space', action='store_true',
+                        help='specifies whether inputs are in channel-space '
+                        'or voxel-space.')
     parser.add_argument('--n_montages', type=int, default=4,
                         help='number of montages to consider based on '
                         'grouped montages; options include 8 (a-h) or 4 '
                         '(grouped by trial)')
+    parser.add_argument('--arch', type=str, default='spatiotemporal_cnn',
+                        choices=['spatiotemporal_cnn', 'fcn'])
     parser.add_argument('--fs', type=int, default=40,
                         help='Sampling frequency of the data')
     parser.add_argument('--filter_zeros', action='store_true',
@@ -520,7 +536,7 @@ if __name__ == '__main__':
     parser.add_argument('--seq_len', type=int, default=156)
     parser.add_argument('--max_abs_scale', action='store_true')
     parser.add_argument('--imputation_method', type=str, default='zero',
-                        choices=['zero'])
+                        choices=['zero', 'mean', 'random'])
     parser.add_argument('--epochs', type=int, help='Number of epochs',
                         default=300)
     parser.add_argument('--lr', type=float, help='Learning Rate',
@@ -541,6 +557,9 @@ if __name__ == '__main__':
                         help='Number of input channels to the model')
     parser.add_argument('--num_temporal_filters', type=int, default=12,
                         help='Number of temporal/frequency filters')
+    parser.add_argument('--num_depthwise_channels', type=int, default=48,
+                        help='Number of channels to compute depthwise '
+                        'convolutions over for variable input dimension')
     parser.add_argument('--num_spatial_filters', type=int, default=8,
                         help='Number of spatial filters per temporal filter')
     parser.add_argument('--num_pointwise_filters', type=int, default=96,
@@ -578,7 +597,9 @@ if __name__ == '__main__':
     # Make experimental directories for output
     exp_dir = os.path.join(
         constants.RESULTS_DIR, args.classification_task,
-        'spatiotemporal_cnn', args.anchor,
+        'spatiotemporal_cnn',
+        'voxel_space' if args.voxel_space else 'channel_space',
+        args.anchor, args.preprocessing_dir,
         'max_abs_scale' if args.max_abs_scale else 'no_scale',
         f'{args.n_montages}_montages',
         args.expt_name)
@@ -592,14 +613,16 @@ if __name__ == '__main__':
     results_queue = multiprocessing.Queue()
 
     # Assign montage list based on the desired number of montages
-    if args.n_montages == 8:
+    if args.voxel_space:
+        montage_list = ['e']
+    elif args.n_montages == 8:
         montage_list = constants.MONTAGES
     elif args.n_montages == 4:
         montage_list = constants.PAIRED_MONTAGES
 
     # Evaluate only a subset of subjects
     if args.subset_subject_ids:
-        assert args.subject in constants.SUBSET_SUBJECT_IDS
+        # assert args.subject in constants.SUBSET_SUBJECT_IDS
         exp_dir = os.path.join(exp_dir, f's_{args.subject}')
         os.makedirs(exp_dir, exist_ok=True)
         os.makedirs(os.path.join(exp_dir, 'checkpoints'), exist_ok=True)

@@ -25,7 +25,7 @@ class SubjectMontageData(FOSData):
     """
     def __init__(self, data_dir: str, subject: str, montage: str,
                  classification_task: str, n_montages: int,
-                 filter_zeros: bool = False):
+                 filter_zeros: bool = False, voxel_space: bool = False):
 
         self.data_dir = data_dir
         self.data = pd.DataFrame()
@@ -43,8 +43,8 @@ class SubjectMontageData(FOSData):
         for m in montages:
             # Pandas DataFrame has format: timestep across trial numbers
             # (index), all possible channels + metadata (columns)
-            temp = pd.read_parquet(
-                os.path.join(data_dir, f'{subject}_{m}_0.parquet'))
+            temp = pd.read_parquet(os.path.join(
+                data_dir, f'{subject}_{m}_0.parquet'))
 
             # Add channels as new features
             self.data = pd.concat([self.data, temp], axis=1)
@@ -55,8 +55,12 @@ class SubjectMontageData(FOSData):
         # Separate DataFrame into metadata and dynamic phase data
         meta_cols = ['trial_num', 'subject_id', 'montage']
         chan_cols = [c for c in self.data.columns if 'ph_' in c]
-        assert ((len(chan_cols) == 256 and n_montages == 4) or
-                (len(chan_cols) == 128 and n_montages == 8))
+        if voxel_space:
+            assert ((len(chan_cols) == 168 and n_montages == 4) or
+                    (len(chan_cols) == 84 and n_montages == 8))
+        else:
+            assert ((len(chan_cols) == 256 and n_montages == 4) or
+                    (len(chan_cols) == 128 and n_montages == 8))
         self.meta_data = self.data.loc[:, meta_cols]
         self.dynamic_table = self.data.loc[:, chan_cols + ['trial_num']]
         # Labels correspond to the trial type of a specific trial number
@@ -301,12 +305,15 @@ class SubjectMontageDataset(Dataset):
         self.nested_cv_idx = nested_cv_idx
 
         self.preprocessing = preprocessing
+        self.impute_chan_dict = dict()
 
         self.labels = self.data.labels
         self.trial_id = self.data.trial_id
         self.dynamic_table = self.data.dynamic_table
         self.chan_cols = [c for c in self.dynamic_table.columns if 'ph_' in c]
         self.idxs = self.data.idxs
+
+        pd.set_option('mode.chained_assignment', 'raise')
 
         # Stratify by class labels
         if self.stratified:
@@ -363,6 +370,10 @@ class SubjectMontageDataset(Dataset):
         self.dynamic_table = self.dynamic_table.loc[
             self.dynamic_table['idx'].isin(self.idxs), :]
 
+        # Fill zero channels with NaN
+        chan_cols = [c for c in self.dynamic_table.columns if 'ph_' in c]
+        self.dynamic_table.loc[:, chan_cols].replace(0, np.nan, inplace=True)
+
         # Get a list of NaN columns that require imputation
         self.nan_cols = list(
             self.dynamic_table.columns[self.dynamic_table.isna().any()])
@@ -372,23 +383,14 @@ class SubjectMontageDataset(Dataset):
         for col in self.nan_cols:
             # Subset of columns
             subset = self.dynamic_table.loc[:, [col, 'trial_num']]
-            if preprocessing['imputed_signal'] is not None:
-                # Use pre-calculated imputed signal on training set to imput
-                for trial in subset.trial_num.unique():
-                    subset_subset = subset.loc[subset['trial_num'] == trial, :]
-                    if np.isnan(subset_subset[col].values[0]):
-                        idxs_to_replace = subset_subset.index
-                        imputed_df.loc[idxs_to_replace, col] = \
-                            preprocessing['imputed_signal']
 
-            elif preprocessing['impute'] == 'zero':
+            # Zero imputation works for all splits
+            if preprocessing['impute'] == 'zero':
                 imputed_df.loc[:, col] = subset.fillna(value=0.0)
-                if self.subset == 'train':
-                    preprocessing['imputed_signal'] = np.zeros((
-                        imputed_df.loc[:, col].shape[0] //
-                        len(subset.trial_num.unique())))
 
-            elif preprocessing['impute'] == 'mean':
+            # Get imputed signal from train set and apply to other subsets
+            elif preprocessing['impute'] == 'mean' \
+                    and self.subset == 'train':
                 running_sig = list()
                 # Loop through trials to aggregate signal from viable channels
                 for trial in subset.trial_num.unique():
@@ -396,9 +398,14 @@ class SubjectMontageDataset(Dataset):
                     subset_subset = subset.loc[subset['trial_num'] == trial, :]
                     running_sig.append(subset_subset.loc[:, col].values)
                 running_sig = np.vstack(running_sig).T
-                mean_sig = np.nanmean(running_sig, axis=1)
+                if np.count_nonzero(~np.isnan(running_sig)) == 0:
+                    subset_subset = subset.loc[
+                        subset['trial_num'] == subset.trial_num.unique()[0], :]
+                    mean_sig = np.zeros_like(subset_subset.loc[:, col].values)
+                else:
+                    mean_sig = np.nanmean(running_sig, axis=1)
                 if self.subset == 'train':
-                    preprocessing['imputed_signal'] = mean_sig
+                    self.impute_chan_dict[col] = mean_sig
                 # Impute with mean signal
                 for trial in subset.trial_num.unique():
                     subset_subset = subset.loc[subset['trial_num'] == trial, :]
@@ -406,7 +413,8 @@ class SubjectMontageDataset(Dataset):
                         idxs_to_replace = subset_subset.index
                         imputed_df.loc[idxs_to_replace, col] = mean_sig
 
-            elif preprocessing['impute'] == 'random':
+            elif preprocessing['impute'] == 'random' \
+                    and self.subset == 'train':
                 # Get non-NaN trials and corresponding indices to choose from
                 non_nan_df = self.dynamic_table.dropna(
                     axis=0, how='any', subset=[col])
@@ -417,14 +425,20 @@ class SubjectMontageDataset(Dataset):
                         non_nan_idx, subset.trial_num.unique() == t)
                 assert len(non_nan_trials) == np.count_nonzero(non_nan_idx)
                 non_nan_idx = np.argwhere(non_nan_idx).flatten()
-                # Select random non-NaN trial used for imputation
-                rand = random.choice(non_nan_idx)
-                subset_subset = subset.loc[
-                    subset['trial_num'] == subset.trial_num.unique()[rand], :]
-                rand_sig = subset_subset.loc[:, col].values
+                if len(non_nan_idx) == 0:
+                    subset_subset = subset.loc[
+                        subset['trial_num'] == subset.trial_num.unique()[0], :]
+                    rand_sig = np.zeros_like(subset_subset.loc[:, col].values)
+                else:
+                    # Select random non-NaN trial used for imputation
+                    rand = random.choice(non_nan_idx)
+                    subset_subset = subset.loc[
+                        subset['trial_num'] == subset.trial_num.unique()[rand],
+                        :]
+                    rand_sig = subset_subset.loc[:, col].values
                 assert not np.isnan(rand_sig[0])
                 if self.subset == 'train':
-                    preprocessing['imputed_signal'] = rand_sig
+                    self.impute_chan_dict[col] = rand_sig
                 # Impute with random signal
                 for trial in subset.trial_num.unique():
                     subset_subset = subset.loc[subset['trial_num'] == trial, :]
@@ -433,19 +447,22 @@ class SubjectMontageDataset(Dataset):
                         imputed_df.loc[idxs_to_replace, col] = rand_sig
         self.dynamic_table = imputed_df
         # Check to make sure no more NaN columns exist
-        assert len(list(
-            self.dynamic_table.columns[self.dynamic_table.isna().any()])) == 0
+        if preprocessing['impute'] == 'zero' or self.subset == 'train':
+            assert len(list(
+                self.dynamic_table.columns[self.dynamic_table.isna().any()])
+                ) == 0
 
         # Stores the dynamic data in a (N, C, T) tensor
         self.dynamic_data = np.empty((
             len(self.trial_id), len(self.chan_cols),
             self.dynamic_table.shape[0] // len(self.trial_id)))
+
         for idx, trial in enumerate(self.trial_id):
             dynamic_trial_data = self.dynamic_table.loc[
                 self.dynamic_table['trial_num'] == trial, :]
-            data = dynamic_trial_data[
-                [c for c in dynamic_trial_data.columns
-                 if c != 'trial_num' and c != 'idx']
+            data = dynamic_trial_data.loc[:, [
+                c for c in dynamic_trial_data.columns
+                if c != 'trial_num' and c != 'idx']
                 ].values.astype(np.float32).T  # data: (C, T)
             # Maximum absolute value scaling
             if preprocessing['max_abs_scale']:
@@ -480,6 +497,45 @@ class SubjectMontageDataset(Dataset):
     def get_labels(self):
         return self.labels
 
+    def impute_chan(self, train_dataset: Dataset):
+
+        impute_chan_dict = train_dataset.impute_chan_dict
+
+        # Impute missing channels
+        imputed_df = self.dynamic_table.copy()
+        for col in self.nan_cols:
+            # Subset of columns
+            subset = self.dynamic_table.loc[:, [col, 'trial_num']]
+
+            # Use pre-calculated imputed signal on training set to imput
+            for trial in subset.trial_num.unique():
+                subset_subset = subset.loc[subset['trial_num'] == trial, :]
+                if np.isnan(subset_subset[col].values[0]):
+                    idxs_to_replace = subset_subset.index
+                    imputed_df.loc[idxs_to_replace, col] = \
+                        impute_chan_dict[col]
+        self.dynamic_table = imputed_df
+        # Check to make sure no more NaN columns exist
+        assert len(list(
+            self.dynamic_table.columns[self.dynamic_table.isna().any()])
+            ) == 0
+
+        # Stores the dynamic data in a (N, C, T) tensor
+        self.dynamic_data = np.empty((
+            len(self.trial_id), len(self.chan_cols),
+            self.dynamic_table.shape[0] // len(self.trial_id)))
+        for idx, trial in enumerate(self.trial_id):
+            dynamic_trial_data = self.dynamic_table.loc[
+                self.dynamic_table['trial_num'] == trial, :]
+            data = dynamic_trial_data.loc[:, [
+                c for c in dynamic_trial_data.columns
+                if c != 'trial_num' and c != 'idx']
+                ].values.astype(np.float32).T  # data: (C, T)
+            # Maximum absolute value scaling
+            if self.preprocessing['max_abs_scale']:
+                data = maxabs_scale(data, axis=0)
+            self.dynamic_data[idx, :, :] = data
+
 
 class DatasetBuilder:
     def __init__(self, data: FOSData, seed: int = 42, seed_cv: int = 15,
@@ -488,7 +544,6 @@ class DatasetBuilder:
         self.seed = seed
         self.seed_cv = seed_cv
         self.preprocessing = preprocessing
-        self.preprocessing['imputed_signal'] = None
 
     def build_datasets(self, cv: int, nested_cv: int) -> Iterable[
             Tuple[Iterable[Tuple[FOSData, FOSData]], FOSData]]:
@@ -511,8 +566,6 @@ class DatasetBuilder:
                         data=data, subset='train', stratified=True,
                         cv=cv, nested_cv=nested_cv, cv_idx=j, nested_cv_idx=i,
                         seed=seed, seed_cv=seed_cv, **self.preprocessing)
-                    self.preprocessing['imputed_signal'] = \
-                        train_dataset.get_imputation()
                     valid_dataset = SubjectMontageDataset(
                         data=data, subset='valid', stratified=True,
                         cv=cv, nested_cv=nested_cv, cv_idx=j, nested_cv_idx=i,

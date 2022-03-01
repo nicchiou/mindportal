@@ -11,11 +11,18 @@ def load_architecture(device: torch.device, args: argparse.Namespace):
     Initializes an SpatiotemporalCNN model with the specified parameters and
     sends it to the device.
     """
-    model = SpatiotemporalCNN(C=args.num_channels,
-                              F1=args.num_temporal_filters,
-                              D=args.num_spatial_filters,
-                              F2=args.num_pointwise_filters,
-                              p=args.dropout, fs=args.fs, T=args.seq_len)
+    if args.arch == 'spatiotemporal_cnn':
+        model = SpatiotemporalCNN(C=args.num_channels,
+                                  F1=args.num_temporal_filters,
+                                  D=args.num_spatial_filters,
+                                  F2=args.num_pointwise_filters,
+                                  p=args.dropout, fs=args.fs, T=args.seq_len)
+    elif args.arch == 'fcn':
+        model = FCN(F1=args.num_temporal_filters,
+                    S=args.num_depthwise_channels,
+                    D=args.num_spatial_filters,
+                    F2=args.num_pointwise_filters,
+                    p=args.dropout, fs=args.fs, T=args.seq_len)
     model.to(device)
     return model
 
@@ -75,6 +82,76 @@ class SpatiotemporalCNN(nn.Module):
         # Classification
         x = torch.flatten(x, 1, -1)                         # (F2 * (T // 8))
         x = self.fc(x)
+
+        return x
+
+
+class FCN(nn.Module):
+    """
+    Fully-convolutional version of the CNN based on EEGNet from
+    https://arxiv.org/pdf/1611.08024.pdf which learns spatiotemporal filters
+    from multi-variate time series data.
+    """
+    def __init__(self, F1: int, S: int, D: int, F2: int,
+                 p: float = 0.5, fs: int = 40, T: int = 56):
+        """
+        Initializes a new SpatiotemporalCNN module.
+        :param F1: number of temporal filters
+        :param S: number of channels for depthwise channel convolution
+        :param D: number of spatial filters for each temporal filter
+        :param F2: number of pointwise filters
+        :param p: dropout probability (0.5 for within-subject classification
+                  and 0.25 for cross-subject classification)
+        :param fs: sampling frequency
+        :param T: number of time points
+        """
+        super().__init__()
+
+        # Temporal convolution capturing freq. above 2 Hz
+        self.conv1 = torch.nn.Conv2d(1, F1, (1, fs // 2), padding=(0, fs // 4),
+                                     bias=False)
+        # Spatial BN over (N, C, T) slices
+        self.bn1 = torch.nn.BatchNorm2d(F1)
+        # Depthwise convolution to learn spatial filters for temporal filters
+        # Since the number of input channels is not fixed, a depthwise
+        # convolution over S channels is defined to aggregate spatial
+        # information and then max pooling takes the spatial region with the
+        # highest activations
+        self.conv2 = ConstrainedConv2d(1, F1, D * F1, (S, 1), padding=0,
+                                       bias=False, groups=F1)
+        # Temporal BN over (N, D) slices
+        self.bn2 = torch.nn.BatchNorm2d(D * F1)
+        self.dropout = torch.nn.Dropout(p)
+        # Depthwise separable convolution representing 500 ms slices
+        self.conv3 = SeparableConv2d(D * F1, F2, (1, fs // 2),
+                                     padding=(0, fs // 4), bias=False)
+        self.bn3 = torch.nn.BatchNorm2d(F2)
+        self.avgpool = torch.nn.AvgPool2d((1, 8))
+        # Pointwise convolutions
+        self.conv4 = torch.nn.Conv2d(F2, 1, (1, 1), bias=False)
+        self.bn4 = torch.nn.BatchNorm2d(1)
+        self.maxpool = torch.nn.MaxPool2d((1, (T // 8)))
+
+    def forward(self, x):
+
+        x = x.type(torch.cuda.FloatTensor)
+
+        # Spatiotemporal filtering
+        x = x.unsqueeze(1)                          # (1, C, T)
+        x = self.bn1(self.conv1(x))                 # (F1, C, T)
+        x = self.bn2(self.conv2(x))                 # (D * F1, C - S + 1, T)
+        x = F.max_pool2d(
+            x, kernel_size=(x.size(2), 1))          # (D * F1, 1, T)
+        x = self.dropout(F.elu(x))                  # (D * F1, 1, T)
+
+        # Combine filters with separable convolution
+        x = self.bn3(self.conv3(x))                 # (F2, 1, T)
+        x = self.dropout(self.avgpool(F.elu(x)))    # (F2, 1, T // 8)
+
+        # Pointwise convolutions
+        x = self.bn4(self.conv4(x))                 # (1, 1, T // 8)
+        x = self.maxpool(x)                         # (1, 1, 1)
+        x = x.squeeze(-1).squeeze(-1)
 
         return x
 
