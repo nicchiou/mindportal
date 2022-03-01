@@ -16,8 +16,8 @@ SUBJECTS_DIR = os.path.join(PHASE_DATA_DIR, 'subject_time_series')
 
 RESULTS_DIR = os.path.join(SHARED_DIR, 'mindportal')
 
-SUBJECT_IDS = ['127', '130', '146', '149', '150', '151', '152', '153', '154',
-               '155', '157', '505', '516', '527', '534']
-SUBSET_SUBJECT_IDS = ['154', '534', '152', '527', '505', '127']
+SUBJECT_IDS = ['127', '146', '149', '150', '151', '152', '153', '154', '155',
+               '157', '505', '516']
+SUBSET_SUBJECT_IDS = ['127', '146', '152', '154', '155', '505']
 MONTAGES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 PAIRED_MONTAGES = ['A', 'B', 'C', 'D']
