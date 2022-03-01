@@ -40,10 +40,7 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
         # Set up Datasets and DataLoaders
         data = SubjectMontageData(
             os.path.join(
-                constants.SUBJECTS_DIR,
-                args.anchor,
-                'bandpass_only' if args.bandpass_only else 'rect_lowpass',
-                args.data_path),
+                constants.SUBJECTS_DIR, args.anchor, args.data_path),
             subject, montage,
             args.classification_task, args.n_montages,
             args.filter_zeros, args.pool_ops, args.max_abs_scale)
@@ -693,15 +690,16 @@ if __name__ == '__main__':
                         'stim_motor (stimulus modality and motor response) '
                         'and response_stim (response modality, stimulus '
                         'modality, and response polarity).')
-    parser.add_argument('--anchor', type=str, default='pc',
-                        help='pre-cue (pc) or response stimulus (rs)')
+    parser.add_argument('--anchor', type=str, default='rl',
+                        choices=['pc', 'rs', 'rl'])
     parser.add_argument('--n_montages', type=int, default=8,
                         help='number of montages to consider based on '
                         'grouped montages; options include 8 (a-h) or 4 '
                         '(grouped by trial)')
-    parser.add_argument('--bandpass_only', action='store_true',
-                        help='indicates whether to use the signal that has '
-                        'not been rectified nor low-pass filtered')
+    parser.add_argument('--preprocessing_dir', type=str,
+                        default='bandpass_only',
+                        choices=['bandpass_only', 'rect_lowpass',
+                                 'no_bandpass'])
     parser.add_argument('--filter_zeros', action='store_true',
                         help='Removes channels with all zeros from input.')
     parser.add_argument('--average_chan', action='store_true',
@@ -806,8 +804,7 @@ if __name__ == '__main__':
     # Make experimental directories for output
     exp_dir = os.path.join(
         constants.RESULTS_DIR, args.classification_task, 'chan_avg_rnn',
-        args.anchor,
-        'bandpass_only' if args.bandpass_only else 'rect_lowpass',
+        args.anchor, args.preprocessing_dir,
         'max_abs_scale' if args.max_abs_scale else 'no_scale',
         f'{args.n_montages}_montages',
         args.arch, args.expt_name)
