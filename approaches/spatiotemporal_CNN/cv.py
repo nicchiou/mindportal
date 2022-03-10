@@ -509,7 +509,11 @@ if __name__ == '__main__':
                         help='resume training at specific subject')
     parser.add_argument('--start_montage', type=str, default='a',
                         help='resume training at specific montage')
+    parser.add_argument('--train_montages', nargs='+', default=['C'],
+                        help='specify montages to train a montage-specific '
+                        'classifier for.')
     parser.add_argument('--classification_task', type=str, default='motor_LR',
+                        choices=['motor_LR', 'stim_motor', 'response_stim'],
                         help='options include motor_LR (motor response), '
                         'stim_motor (stimulus modality and motor response) '
                         'and response_stim (response modality, stimulus '
@@ -614,7 +618,7 @@ if __name__ == '__main__':
 
     # Assign montage list based on the desired number of montages
     if args.voxel_space:
-        montage_list = ['C']
+        montage_list = args.train_montages
     elif args.n_montages == 8:
         montage_list = constants.MONTAGES
     elif args.n_montages == 4:
