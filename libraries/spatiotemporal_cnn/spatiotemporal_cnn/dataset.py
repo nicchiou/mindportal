@@ -38,7 +38,7 @@ class SubjectMontageData(FOSData):
                                'c': 'B', 'd': 'B',
                                'e': 'C', 'f': 'C',
                                'g': 'D', 'h': 'D'}
-            montages = [k for k, v in paired_montages.items() if v == montage]
+            montages = [v for k, v in paired_montages.items() if v == montage]
 
         for m in montages:
             # Pandas DataFrame has format: timestep across trial numbers
@@ -56,8 +56,7 @@ class SubjectMontageData(FOSData):
         meta_cols = ['trial_num', 'subject_id', 'montage']
         chan_cols = [c for c in self.data.columns if 'ph_' in c]
         if voxel_space:
-            assert ((len(chan_cols) == 168 and n_montages == 4) or
-                    (len(chan_cols) == 84 and n_montages == 8))
+            assert len(chan_cols) == 84
         else:
             assert ((len(chan_cols) == 256 and n_montages == 4) or
                     (len(chan_cols) == 128 and n_montages == 8))

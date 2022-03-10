@@ -614,7 +614,7 @@ if __name__ == '__main__':
 
     # Assign montage list based on the desired number of montages
     if args.voxel_space:
-        montage_list = ['e']
+        montage_list = ['C']
     elif args.n_montages == 8:
         montage_list = constants.MONTAGES
     elif args.n_montages == 4:

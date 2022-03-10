@@ -37,6 +37,10 @@ if __name__ == '__main__':
     parser.add_argument('--voxel_space', action='store_true',
                         help='specifies whether inputs are in channel-space '
                         'or voxel-space.')
+    parser.add_argument('--n_montages', type=int, default=4,
+                        help='number of montages to consider based on '
+                        'grouped montages; options include 8 (a-h) or 4 '
+                        '(grouped by trial)')
     parser.add_argument('--save_subject_ts', action='store_true',
                         help='dictates whether to save subject time series '
                         'data by time step.')
@@ -52,6 +56,12 @@ if __name__ == '__main__':
         args.anchor, args.preprocessing_dir), exist_ok=True)
 
     df = pd.DataFrame()
+    montage_map = {
+        'ab': 'A',
+        'cd': 'B',
+        'ef': 'C',
+        'gh': 'D'
+    }
 
     for d in baseline_dirs:
 
@@ -66,12 +76,20 @@ if __name__ == '__main__':
 
             # Parse file name
             subject_id = f[3:6]
-            montage = f[6]
+            if args.n_montages == 4:
+                montage = f[6:8]
+                if '.' in montage:
+                    continue
+            else:
+                montage = f[6]
 
             # Read .mat file
             pc = sio.loadmat(os.path.join(
                 constants.MATFILE_DIR,
                 'voxel_space' if args.voxel_space else 'channel_space', d, f))
+            if args.n_montages == 4:
+                # Map to paired montage naming convention
+                montage = montage_map[montage]
 
             # Parse header dictionary
             boxy_hdr = {k: v for (k, v) in zip(
@@ -88,9 +106,9 @@ if __name__ == '__main__':
             if args.voxel_space:
                 # Parse recording voxel-space data
                 # Shape is (6, 7, 56, num_trials, 2), type: np.array
-                dc_data = pc['voxel'][0][0][0]
-                ac_data = pc['voxel'][0][0][1]
-                ph_data = pc['voxel'][0][0][2]
+                dc_data = pc['voxel_avg'][0][0][0]
+                ac_data = pc['voxel_avg'][0][0][1]
+                ph_data = pc['voxel_avg'][0][0][2]
 
                 # Rotate data matrix to align with diagram: y-coordinate
                 # specifies row and x-coordinate specifies column
@@ -206,12 +224,12 @@ if __name__ == '__main__':
                         args.anchor,
                         args.preprocessing_dir, args.save_subject_dir)
                     os.makedirs(out_dir, exist_ok=True)
-                    suffix = freq_band[:2] \
+                    suffix = int(freq_band[:2]) \
                         if args.preprocessing_dir == 'bandpass_only' \
-                        else freq_band[-2:]
+                        else int(float(freq_band[-2:]))
                     all_ph_signals.to_parquet(os.path.join(
                         out_dir,
-                        f'{subject_id}_{montage}_{int(suffix)}.parquet'),
+                        f'{subject_id}_{montage}_{suffix}.parquet'),
                         index=False)
 
             else:
