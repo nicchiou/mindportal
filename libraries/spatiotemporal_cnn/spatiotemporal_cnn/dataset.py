@@ -17,6 +17,121 @@ class FOSData:
         pass
 
 
+class SubjectData(FOSData):
+    """
+    Creates a representation of the FOS data set that groups subjects' dynamic
+    data with their corresponding labels based on the classification task and
+    includes all montages available for that given subject (only makes sense
+    in the voxel-space). Performs basic pre-processing to as specified by the
+    input arguments.
+    """
+    def __init__(self, data_dir: str, subject: str, train_montages: list,
+                 classification_task: str, n_montages: int,
+                 filter_zeros: bool = False, voxel_space: bool = True):
+
+        self.data_dir = data_dir
+        self.data = pd.DataFrame()
+
+        assert voxel_space
+
+        # Make assertions about the montage list matching the number of
+        # montages
+        if n_montages == 4:
+            assert set(train_montages).issubset(set(constants.PAIRED_MONTAGES))
+        elif n_montages == 8:
+            assert set(train_montages).issubset(set(constants.MONTAGES))
+
+        prev_trial_max = 0
+        for m in train_montages:
+            # Pandas DataFrame has format: timestep across trial numbers
+            # (index), all possible channels + metadata (columns)
+            temp = pd.read_parquet(os.path.join(
+                data_dir, f'{subject}_{m}_0.parquet'))
+
+            # Rename montages to have common columns (corresponding to voxels)
+            columns = list(temp.columns)
+            for i, c in enumerate(columns):
+                if 'ph_' not in c:
+                    continue
+                splits = c.split('_')
+                del splits[1]
+                joined = '_'.join(splits)
+                columns[i] = joined
+            temp.columns = columns
+
+            # Create unique trial numbers
+            temp.loc[:, 'trial_num'] = \
+                temp.loc[:, 'trial_num'].values + prev_trial_max
+            prev_trial_max = max(temp.loc[:, 'trial_num'].values) + 1
+
+            # Add montage data as additional trials
+            self.data = self.data.append(temp, ignore_index=True)
+
+        # Separate DataFrame into metadata and dynamic phase data
+        meta_cols = ['trial_num', 'subject_id', 'montage']
+        vox_cols = [c for c in self.data.columns if 'ph_' in c]
+        assert len(vox_cols) == 84
+        self.meta_data = self.data.loc[:, meta_cols]
+        self.dynamic_table = self.data.loc[:, vox_cols + ['trial_num']]
+        # Labels correspond to the trial type of a specific trial number
+        self.labels = self.data.groupby('trial_num').mean().reset_index()[
+            ['trial_num', 'trial_type']]
+        self.labels.index.name = None
+        self.labels = pd.DataFrame(self.labels,
+                                   columns=['trial_num', 'trial_type'])
+
+        # Filter channels by dropping channels with all zeros across all trials
+        # (across train/valid/test splits)
+        # Step 1: replace zeros with NaN
+        # Step 2: drop columns with all NaN values
+        if filter_zeros:
+            self.dynamic_table.loc[:, vox_cols] = \
+                self.dynamic_table.loc[:, vox_cols].replace(0, np.nan)
+            self.dynamic_table = self.dynamic_table.dropna(axis=1, how='all')
+        # How many viable channels remain?
+        viable_chan = [c for c in self.dynamic_table.columns if 'ph_' in c]
+        self.num_viable = len(viable_chan)
+
+        # Combine trial types to get class labels
+        # Classify left versus right motor response
+        if classification_task == 'motor_LR':
+            func = combine_trial_types.combine_motor_LR
+            self.classes = 2
+        # Classify stimulus modality and motor response
+        elif classification_task == 'stim_motor':
+            func = combine_trial_types.stim_modality_motor_LR_labels
+            self.classes = 4
+        # Classify response modality, stimulus modality, and response
+        # polarity
+        elif classification_task == 'response_stim':
+            func = combine_trial_types.sresponse_stim_modality_labels
+            self.classes = 8
+        else:
+            raise NotImplementedError('Classification task not supported')
+        self.labels['trial_type'] = self.labels['trial_type'].apply(func)
+        self.labels.rename({'trial_type': 'label'}, axis=1, inplace=True)
+        self.labels = self.labels.dropna(
+            axis=0, subset=['label']).copy().reset_index(drop=True)
+
+        # NumPy arrays of trial_num, labels, and indices
+        self.trial_id = self.labels.loc[:, 'trial_num'].unique()
+        self.labels = self.labels.loc[:, 'label'].values.astype(np.float32)
+        self.idxs = list(range(len(self.labels)))
+
+        # Dynamic table is a DataFrame containing trials present for the
+        # specified trial type - assign corresponding idxs to match trial_id
+        self.dynamic_table = self.dynamic_table.loc[
+            self.dynamic_table['trial_num'].isin(self.trial_id), :
+            ].reset_index(drop=True)
+        trial_idx_map = dict(zip(self.trial_id, self.idxs))
+        self.dynamic_table.loc[:, 'idx'] = self.dynamic_table.apply(
+            lambda x: trial_idx_map[x.trial_num], axis=1)
+        assert len(self.dynamic_table['trial_num'].unique()) == len(self.idxs)
+
+    def get_num_viable_channels(self):
+        return self.num_viable
+
+
 class SubjectMontageData(FOSData):
     """
     Creates a representation of the FOS data set that groups subjects' dynamic
@@ -31,7 +146,7 @@ class SubjectMontageData(FOSData):
         self.data = pd.DataFrame()
 
         # Group montages in pairs based on trial num recorded (a-b, c-d, etc.)
-        if n_montages == 8:
+        if n_montages == 8 or voxel_space:
             montages = [montage]
         elif n_montages == 4:
             paired_montages = {'a': 'A', 'b': 'A',
@@ -40,6 +155,8 @@ class SubjectMontageData(FOSData):
                                'g': 'D', 'h': 'D'}
             montages = [v for k, v in paired_montages.items() if v == montage]
 
+        if voxel_space:
+            assert len(montage) == 1
         for m in montages:
             # Pandas DataFrame has format: timestep across trial numbers
             # (index), all possible channels + metadata (columns)
@@ -132,7 +249,7 @@ class MontagePretrainData(FOSData):
     """
     def __init__(self, data_dir: str, subject: str, montage: str,
                  classification_task: str, n_montages: int,
-                 filter_zeros: bool = False):
+                 filter_zeros: bool = False, voxel_space: bool = False):
 
         self.data_dir = data_dir
         self.data = pd.DataFrame()
@@ -175,14 +292,9 @@ class MontagePretrainData(FOSData):
             for pm in constants.PAIRED_MONTAGES:
                 # Check whether we use the base montage for pre-training
                 if pm != montage:
-                    montages = [k for k, v in paired_montages.items()
-                                if v == pm]
-
-                    trial = pd.DataFrame()
-
-                    for montage_idx, m in enumerate(montages):
+                    if voxel_space:
                         temp = pd.read_parquet(os.path.join(
-                            data_dir, f'{subject}_{m}_0.parquet'))
+                            data_dir, f'{subject}_{pm}_0.parquet'))
 
                         # Rename montages to have common columns
                         columns = list(temp.columns)
@@ -190,30 +302,62 @@ class MontagePretrainData(FOSData):
                             if 'ph_' not in c:
                                 continue
                             splits = c.split('_')
-                            splits[1] = str(montage_idx)
+                            del splits[1]
                             joined = '_'.join(splits)
                             columns[i] = joined
                         temp.columns = columns
 
-                        # Add channels as new features
-                        trial = pd.concat([trial, temp], axis=1)
+                        # Create unique trial numbers
+                        temp.loc[:, 'trial_num'] = \
+                            temp.loc[:, 'trial_num'].values + prev_trial_max
+                        prev_trial_max = max(
+                            temp.loc[:, 'trial_num'].values) + 1
 
-                        # Remove duplicate columns
-                        trial = trial.loc[:, ~trial.columns.duplicated()]
+                        # Add montage data as additional trials
+                        self.data = self.data.append(temp, ignore_index=True)
+                    else:
+                        montages = [k for k, v in paired_montages.items()
+                                    if v == pm]
 
-                    # Create unique trial numbers
-                    trial.loc[:, 'trial_num'] = \
-                        trial.loc[:, 'trial_num'].values + prev_trial_max
-                    prev_trial_max = max(
-                        trial.loc[:, 'trial_num'].values) + 1
+                        trial = pd.DataFrame()
 
-                    self.data = self.data.append(trial, ignore_index=True)
+                        for montage_idx, m in enumerate(montages):
+                            temp = pd.read_parquet(os.path.join(
+                                data_dir, f'{subject}_{m}_0.parquet'))
+
+                            # Rename montages to have common columns
+                            columns = list(temp.columns)
+                            for i, c in enumerate(columns):
+                                if 'ph_' not in c:
+                                    continue
+                                splits = c.split('_')
+                                splits[1] = str(montage_idx)
+                                joined = '_'.join(splits)
+                                columns[i] = joined
+                            temp.columns = columns
+
+                            # Add channels as new features
+                            trial = pd.concat([trial, temp], axis=1)
+
+                            # Remove duplicate columns
+                            trial = trial.loc[:, ~trial.columns.duplicated()]
+
+                        # Create unique trial numbers
+                        trial.loc[:, 'trial_num'] = \
+                            trial.loc[:, 'trial_num'].values + prev_trial_max
+                        prev_trial_max = max(
+                            trial.loc[:, 'trial_num'].values) + 1
+
+                        self.data = self.data.append(trial, ignore_index=True)
 
         # Separate DataFrame into metadata and dynamic phase data
         meta_cols = ['trial_num', 'subject_id', 'montage']
         chan_cols = [c for c in self.data.columns if 'ph_' in c]
-        assert ((len(chan_cols) == 256 and n_montages == 4) or
-                (len(chan_cols) == 128 and n_montages == 8))
+        if voxel_space:
+            assert len(chan_cols) == 84
+        else:
+            assert ((len(chan_cols) == 256 and n_montages == 4) or
+                    (len(chan_cols) == 128 and n_montages == 8))
         self.meta_data = self.data.loc[:, meta_cols]
         self.dynamic_table = self.data.loc[:, chan_cols + ['trial_num']]
         # Labels correspond to the trial type of a specific trial number

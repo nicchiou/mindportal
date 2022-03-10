@@ -43,9 +43,12 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             # Set up Datasets and DataLoaders for pre-training
             data = MontagePretrainData(
                 os.path.join(
-                    constants.SUBJECTS_DIR, args.anchor, args.data_path),
+                    constants.SUBJECTS_DIR,
+                    'voxel_space' if args.voxel_space else 'channel_space',
+                    args.anchor, args.preprocessing_dir, args.data_path),
                 subject, montage,
-                args.classification_task, args.n_montages, args.filter_zeros)
+                args.classification_task, args.n_montages,
+                args.filter_zeros, args.voxel_space)
             # Get number of input channels
             args.num_channels = data.get_num_viable_channels()
 
@@ -123,9 +126,12 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             # Set up Datasets and DataLoaders
             data = SubjectMontageData(
                 os.path.join(
-                    constants.SUBJECTS_DIR, args.anchor, args.data_path),
+                    constants.SUBJECTS_DIR,
+                    'voxel_space' if args.voxel_space else 'channel_space',
+                    args.anchor, args.preprocessing_dir, args.data_path),
                 subject, montage,
-                args.classification_task, args.n_montages, args.filter_zeros)
+                args.classification_task, args.n_montages,
+                args.filter_zeros, args.voxel_space)
             # Get number of input channels
             args.num_channels = data.get_num_viable_channels()
 
@@ -599,6 +605,10 @@ if __name__ == '__main__':
                         'modality, and response polarity).')
     parser.add_argument('--anchor', type=str, default='rl',
                         choices=['pc', 'rs', 'rl'])
+    parser.add_argument('--preprocessing_dir', type=str,
+                        default='no_bandpass',
+                        choices=['bandpass_only', 'rect_lowpass',
+                                 'no_bandpass'])
     parser.add_argument('--voxel_space', action='store_true',
                         help='specifies whether inputs are in channel-space '
                         'or voxel-space.')
@@ -678,7 +688,9 @@ if __name__ == '__main__':
     # Make experimental directories for output
     exp_dir = os.path.join(
         constants.RESULTS_DIR, args.classification_task,
-        'spatiotemporal_cnn', args.anchor,
+        'spatiotemporal_cnn',
+        'voxel_space' if args.voxel_space else 'channel_space',
+        args.anchor, args.preprocessing_dir,
         'max_abs_scale' if args.max_abs_scale else 'no_scale',
         f'{args.n_montages}_montages',
         args.expt_name)
@@ -699,7 +711,6 @@ if __name__ == '__main__':
 
     # Evaluate only a subset of subjects
     if args.subset_subject_ids:
-        assert args.subject in constants.SUBSET_SUBJECT_IDS
         exp_dir = os.path.join(exp_dir, f's_{args.subject}')
         os.makedirs(exp_dir, exist_ok=True)
         os.makedirs(os.path.join(exp_dir, 'checkpoints'), exist_ok=True)

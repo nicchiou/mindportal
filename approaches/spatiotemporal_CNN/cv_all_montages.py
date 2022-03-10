@@ -19,7 +19,7 @@ from tqdm import tqdm
 # (https://github.com/ufoym/imbalanced-dataset-sampler)
 from utils import constants
 
-from spatiotemporal_cnn.dataset import DatasetBuilder, SubjectMontageData
+from spatiotemporal_cnn.dataset import DatasetBuilder, SubjectData
 from spatiotemporal_cnn.utils import (deterministic, evaluate,
                                       save_predictions)
 from spatiotemporal_cnn.models import load_architecture
@@ -34,17 +34,17 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
         device = f'cuda:{gpunum}' if torch.cuda.is_available() else 'cpu'
 
         while not input_queue.empty():
-            subject, montage = input_queue.get()
+            subject, montage_list = input_queue.get()
 
             deterministic(args.train_seed)
 
             # Set up Datasets and DataLoaders
-            data = SubjectMontageData(
+            data = SubjectData(
                 os.path.join(
                     constants.SUBJECTS_DIR,
                     'voxel_space' if args.voxel_space else 'channel_space',
                     args.anchor, args.preprocessing_dir, args.data_path),
-                subject, montage,
+                subject, montage_list,
                 args.classification_task, args.n_montages, args.filter_zeros,
                 args.voxel_space)
             # Get number of input channels
@@ -133,7 +133,7 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
                     model.load_state_dict(
                         copy.deepcopy(initialized_parameters))
                     trial_results = train(
-                        subject, montage,
+                        subject, 'all',
                         args, train_loader, valid_loader, test_loader,
                         optimizer, criterion, model, device, exp_dir,
                         checkpoint_suffix=checkpoint_suffix)
@@ -507,9 +507,8 @@ if __name__ == '__main__':
                         'subset_subject_ids from constants.py)')
     parser.add_argument('--start_subject', type=str, default='127',
                         help='resume training at specific subject')
-    parser.add_argument('--start_montage', type=str, default='a',
-                        help='resume training at specific montage')
-    parser.add_argument('--train_montages', nargs='+', default=['C'],
+    parser.add_argument('--train_montages', nargs='+',
+                        default=['A', 'B', 'C', 'D'],
                         help='specify montages to train a montage-specific '
                         'classifier for.')
     parser.add_argument('--classification_task', type=str, default='motor_LR',
@@ -589,6 +588,7 @@ if __name__ == '__main__':
     parser.add_argument('--verbose', action='store_true')
     args = parser.parse_args()
     args.stratified = not args.no_stratified
+    assert args.voxel_space
 
     # Set start method of multiprocessing library
     try:
@@ -605,7 +605,7 @@ if __name__ == '__main__':
         'voxel_space' if args.voxel_space else 'channel_space',
         args.anchor, args.preprocessing_dir,
         'max_abs_scale' if args.max_abs_scale else 'no_scale',
-        f'{args.n_montages}_montages',
+        f'{args.n_montages}_montages', 'cropped', 'all_montages',
         args.expt_name)
     os.makedirs(exp_dir, exist_ok=True)
     os.makedirs(os.path.join(exp_dir, 'checkpoints'), exist_ok=True)
@@ -616,14 +616,6 @@ if __name__ == '__main__':
     input_queue = multiprocessing.Queue()
     results_queue = multiprocessing.Queue()
 
-    # Assign montage list based on the desired number of montages
-    if args.voxel_space:
-        montage_list = args.train_montages
-    elif args.n_montages == 8:
-        montage_list = constants.MONTAGES
-    elif args.n_montages == 4:
-        montage_list = constants.PAIRED_MONTAGES
-
     # Evaluate only a subset of subjects
     if args.subset_subject_ids:
         exp_dir = os.path.join(exp_dir, f's_{args.subject}')
@@ -631,25 +623,20 @@ if __name__ == '__main__':
         os.makedirs(os.path.join(exp_dir, 'checkpoints'), exist_ok=True)
         os.makedirs(os.path.join(exp_dir, 'predictions'), exist_ok=True)
         os.makedirs(os.path.join(exp_dir, 'final_predictions'), exist_ok=True)
-        for montage in montage_list:
-            input_queue.put((args.subject, montage))
+        input_queue.put((args.subject, args.train_montages))
     # Evaluate all subjects
     else:
         # Start training from a specific subject and montage
         subject_idx = np.argwhere(
             np.array(constants.SUBJECT_IDS) == args.start_subject)
-        montage_idx = np.argwhere(
-            np.array(montage_list) == args.start_montage)
 
         first_subject = True
         for subject in constants.SUBJECT_IDS[int(subject_idx):]:
             if first_subject:
-                for montage in montage_list[int(montage_idx):]:
-                    input_queue.put((subject, montage))
+                input_queue.put((args.subject, args.train_montages))
                 first_subject = False
             else:
-                for montage in montage_list:
-                    input_queue.put((subject, montage))
+                input_queue.put((args.subject, args.train_montages))
 
     print(f'Approximate subject/montage queue size: {input_queue.qsize()}')
     prog_bar = tqdm(total=input_queue.qsize())
