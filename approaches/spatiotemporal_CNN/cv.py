@@ -307,8 +307,9 @@ def train(subject: str, montage: str,
         # Save the best model at each epoch, using validation accuracy or
         # f1-score as the metric
         eps = 0.001
-        if epoch_loss_valid < best_valid_loss and \
-                best_valid_loss - epoch_loss_valid >= eps:
+        if epoch > args.min_epochs and \
+                metrics_valid[args.metric] > best_valid_metric and \
+                metrics_valid[args.metric] - best_valid_metric >= eps:
             # Reset early stopping epochs w/o improvement
             epochs_without_improvement = 0
             # Record best validation metrics
@@ -554,6 +555,9 @@ if __name__ == '__main__':
     parser.add_argument('--early_stop', type=int,
                         help='Patience in early stop in validation set '
                         '(-1 -> no early stop)', default=-1)
+    parser.add_argument('--min_epochs', type=int, default=0,
+                        help='Minimum number of epochs the model must train '
+                        'for before starting early stopping patience')
     parser.add_argument('--weight_decay', type=float, help='Weight decay',
                         default=0.0001)
     parser.add_argument('--dropout', type=float, default=0.5)
