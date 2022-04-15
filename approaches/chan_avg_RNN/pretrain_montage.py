@@ -43,7 +43,7 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             # Set up Datasets and DataLoaders for pre-training
             data = MontagePretrainData(
                 os.path.join(
-                    constants.SUBJECTS_DIR,
+                    constants.PH_SUBJECTS_DIR,
                     args.anchor,
                     'bandpass_only' if args.bandpass_only else 'rect_lowpass',
                     args.data_path),
@@ -127,7 +127,7 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             # Set up Datasets and DataLoaders for fine-tuning
             data = SubjectMontageData(
                 os.path.join(
-                    constants.SUBJECTS_DIR,
+                    constants.PH_SUBJECTS_DIR,
                     args.anchor,
                     'bandpass_only' if args.bandpass_only else 'rect_lowpass',
                     args.data_path),

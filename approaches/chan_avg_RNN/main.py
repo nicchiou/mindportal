@@ -660,7 +660,7 @@ if __name__ == '__main__':
             # Set up Datasets and DataLoaders
             data = SubjectMontageData(
                 os.path.join(
-                    constants.SUBJECTS_DIR,
+                    constants.PH_SUBJECTS_DIR,
                     args.anchor,
                     'bandpass_only' if args.bandpass_only else 'rect_lowpass',
                     args.data_path),

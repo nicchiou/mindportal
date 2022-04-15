@@ -26,10 +26,12 @@ class CrossSubjectData(FOSData):
                  included_subjects: list, excluded_subjects: list,
                  train_montages: list,
                  classification_task: str, n_montages: int,
-                 filter_zeros: bool = False, voxel_space: bool = True):
+                 filter_zeros: bool = False, voxel_space: bool = True,
+                 data_type: str = 'ph'):
 
         self.data_dir = data_dir
         self.data = pd.DataFrame()
+        self.data_type_prefix = f'{data_type}_'
 
         assert voxel_space
 
@@ -63,7 +65,7 @@ class CrossSubjectData(FOSData):
                 # Rename montages to have common columns
                 columns = list(temp.columns)
                 for i, c in enumerate(columns):
-                    if 'ph_' not in c:
+                    if self.data_type_prefix not in c:
                         continue
                     splits = c.split('_')
                     del splits[1]
@@ -81,7 +83,7 @@ class CrossSubjectData(FOSData):
 
         # Separate DataFrame into metadata and dynamic phase data
         meta_cols = ['trial_num', 'subject_id', 'montage']
-        vox_cols = [c for c in self.data.columns if 'ph_' in c]
+        vox_cols = [c for c in self.data.columns if self.data_type_prefix in c]
         assert len(vox_cols) == 84
         self.meta_data = self.data.loc[:, meta_cols]
         self.dynamic_table = self.data.loc[:, vox_cols + ['trial_num']]
@@ -100,9 +102,11 @@ class CrossSubjectData(FOSData):
             self.dynamic_table.loc[:, vox_cols] = \
                 self.dynamic_table.loc[:, vox_cols].replace(0, np.nan)
             self.dynamic_table = self.dynamic_table.dropna(axis=1, how='all')
-            vox_cols = [c for c in self.dynamic_table.columns if 'ph_' in c]
+            vox_cols = [c for c in self.dynamic_table.columns
+                        if self.data_type_prefix in c]
         # How many viable channels remain?
-        viable_chan = [c for c in self.dynamic_table.columns if 'ph_' in c]
+        viable_chan = [c for c in self.dynamic_table.columns
+                       if self.data_type_prefix in c]
         self.num_viable = len(viable_chan)
 
         # Remove trials that contain all zero values for voxels
@@ -166,10 +170,12 @@ class SubjectData(FOSData):
     """
     def __init__(self, data_dir: str, subject: str, train_montages: list,
                  classification_task: str, n_montages: int,
-                 filter_zeros: bool = False, voxel_space: bool = True):
+                 filter_zeros: bool = False, voxel_space: bool = True,
+                 data_type: str = 'ph'):
 
         self.data_dir = data_dir
         self.data = pd.DataFrame()
+        self.data_type_prefix = f'{data_type}_'
 
         assert voxel_space
 
@@ -184,13 +190,18 @@ class SubjectData(FOSData):
         for m in train_montages:
             # Pandas DataFrame has format: timestep across trial numbers
             # (index), all possible channels + metadata (columns)
-            temp = pd.read_parquet(os.path.join(
-                data_dir, f'{subject}_{m}_0.parquet'))
+            try:
+                temp = pd.read_parquet(os.path.join(
+                    data_dir, f'{subject}_{m}_0.parquet'))
+            except FileNotFoundError:
+                print(f'Subject {subject} does not have montage {m} to '
+                      'include in training')
+                continue
 
             # Rename montages to have common columns (corresponding to voxels)
             columns = list(temp.columns)
             for i, c in enumerate(columns):
-                if 'ph_' not in c:
+                if self.data_type_prefix not in c:
                     continue
                 splits = c.split('_')
                 del splits[1]
@@ -208,7 +219,7 @@ class SubjectData(FOSData):
 
         # Separate DataFrame into metadata and dynamic phase data
         meta_cols = ['trial_num', 'subject_id', 'montage']
-        vox_cols = [c for c in self.data.columns if 'ph_' in c]
+        vox_cols = [c for c in self.data.columns if self.data_type_prefix in c]
         assert len(vox_cols) == 84
         self.meta_data = self.data.loc[:, meta_cols]
         self.dynamic_table = self.data.loc[:, vox_cols + ['trial_num']]
@@ -227,9 +238,11 @@ class SubjectData(FOSData):
             self.dynamic_table.loc[:, vox_cols] = \
                 self.dynamic_table.loc[:, vox_cols].replace(0, np.nan)
             self.dynamic_table = self.dynamic_table.dropna(axis=1, how='all')
-            vox_cols = [c for c in self.dynamic_table.columns if 'ph_' in c]
+            vox_cols = [c for c in self.dynamic_table.columns
+                        if self.data_type_prefix in c]
         # How many viable channels remain?
-        viable_chan = [c for c in self.dynamic_table.columns if 'ph_' in c]
+        viable_chan = [c for c in self.dynamic_table.columns
+                       if self.data_type_prefix in c]
         self.num_viable = len(viable_chan)
 
         # Remove trials that contain all zero values for voxels
@@ -291,10 +304,12 @@ class SubjectMontageData(FOSData):
     """
     def __init__(self, data_dir: str, subject: str, montage: str,
                  classification_task: str, n_montages: int,
-                 filter_zeros: bool = False, voxel_space: bool = False):
+                 filter_zeros: bool = False, voxel_space: bool = False,
+                 data_type: str = 'ph'):
 
         self.data_dir = data_dir
         self.data = pd.DataFrame()
+        self.data_type_prefix = f'{data_type}_'
 
         # Group montages in pairs based on trial num recorded (a-b, c-d, etc.)
         if n_montages == 8 or voxel_space:
@@ -311,8 +326,12 @@ class SubjectMontageData(FOSData):
         for m in montages:
             # Pandas DataFrame has format: timestep across trial numbers
             # (index), all possible channels + metadata (columns)
-            temp = pd.read_parquet(os.path.join(
-                data_dir, f'{subject}_{m}_0.parquet'))
+            try:
+                temp = pd.read_parquet(os.path.join(
+                    data_dir, f'{subject}_{m}_0.parquet'))
+            except FileNotFoundError as e:
+                print(f'Montage {m} for subject {subject} does not exist!')
+                raise e
 
             # Add channels as new features
             self.data = pd.concat([self.data, temp], axis=1)
@@ -322,7 +341,8 @@ class SubjectMontageData(FOSData):
 
         # Separate DataFrame into metadata and dynamic phase data
         meta_cols = ['trial_num', 'subject_id', 'montage']
-        chan_cols = [c for c in self.data.columns if 'ph_' in c]
+        chan_cols = [c for c in self.data.columns
+                     if self.data_type_prefix in c]
         if voxel_space:
             assert len(chan_cols) == 84
         else:
@@ -345,10 +365,15 @@ class SubjectMontageData(FOSData):
             self.dynamic_table.loc[:, chan_cols] = \
                 self.dynamic_table.loc[:, chan_cols].replace(0, np.nan)
             self.dynamic_table = self.dynamic_table.dropna(axis=1, how='all')
-            chan_cols = [c for c in self.dynamic_table.columns if 'ph_' in c]
+            chan_cols = [c for c in self.dynamic_table.columns
+                         if self.data_type_prefix in c]
         # How many viable channels remain?
-        viable_chan = [c for c in self.dynamic_table.columns if 'ph_' in c]
+        viable_chan = [c for c in self.dynamic_table.columns
+                       if self.data_type_prefix in c]
         self.num_viable = len(viable_chan)
+        if self.num_viable == 0:
+            print(f'Montage {m} for subject {subject} has no viable channels!')
+            raise NotImplementedError('num_viable channels = 0')
 
         # Remove trials that contain all zero values for channels
         self.dynamic_table.loc[:, chan_cols] = \
@@ -412,10 +437,12 @@ class MontagePretrainData(FOSData):
     """
     def __init__(self, data_dir: str, subject: str, montage: str,
                  classification_task: str, n_montages: int,
-                 filter_zeros: bool = False, voxel_space: bool = False):
+                 filter_zeros: bool = False, voxel_space: bool = False,
+                 data_type: str = 'ph'):
 
         self.data_dir = data_dir
         self.data = pd.DataFrame()
+        self.data_type_prefix = f'{data_type}_'
 
         prev_trial_max = 0
         paired_montages = {'a': 'A', 'b': 'A',
@@ -430,13 +457,18 @@ class MontagePretrainData(FOSData):
                     # Pandas DataFrame has format: timestep across trial
                     # numbers (index), all possible channels + metadata
                     # (columns)
-                    temp = pd.read_parquet(
-                        os.path.join(data_dir, f'{subject}_{m}_0.parquet'))
+                    try:
+                        temp = pd.read_parquet(
+                            os.path.join(data_dir, f'{subject}_{m}_0.parquet'))
+                    except FileNotFoundError:
+                        print(f'Subject {subject} does not have montage {m} '
+                              'for pre-training.')
+                        continue
 
                     # Rename montages to have common columns
                     columns = list(temp.columns)
                     for i, c in enumerate(columns):
-                        if 'ph_' not in c:
+                        if self.data_type_prefix not in c:
                             continue
                         splits = c.split('_')
                         splits[1] = 'chan'
@@ -456,13 +488,18 @@ class MontagePretrainData(FOSData):
                 # Check whether we use the base montage for pre-training
                 if pm != montage:
                     if voxel_space:
-                        temp = pd.read_parquet(os.path.join(
-                            data_dir, f'{subject}_{pm}_0.parquet'))
+                        try:
+                            temp = pd.read_parquet(os.path.join(
+                                data_dir, f'{subject}_{pm}_0.parquet'))
+                        except FileNotFoundError:
+                            print(f'Subject {subject} does not have montage '
+                                  f'{pm} for pre-training.')
+                            continue
 
                         # Rename montages to have common columns
                         columns = list(temp.columns)
                         for i, c in enumerate(columns):
-                            if 'ph_' not in c:
+                            if self.data_type_prefix not in c:
                                 continue
                             splits = c.split('_')
                             del splits[1]
@@ -491,7 +528,7 @@ class MontagePretrainData(FOSData):
                             # Rename montages to have common columns
                             columns = list(temp.columns)
                             for i, c in enumerate(columns):
-                                if 'ph_' not in c:
+                                if self.data_type_prefix not in c:
                                     continue
                                 splits = c.split('_')
                                 splits[1] = str(montage_idx)
@@ -515,7 +552,8 @@ class MontagePretrainData(FOSData):
 
         # Separate DataFrame into metadata and dynamic phase data
         meta_cols = ['trial_num', 'subject_id', 'montage']
-        chan_cols = [c for c in self.data.columns if 'ph_' in c]
+        chan_cols = [c for c in self.data.columns
+                     if self.data_type_prefix in c]
         if voxel_space:
             assert len(chan_cols) == 84
         else:
@@ -538,9 +576,11 @@ class MontagePretrainData(FOSData):
             self.dynamic_table.loc[:, chan_cols] = \
                 self.dynamic_table.loc[:, chan_cols].replace(0, np.nan)
             self.dynamic_table = self.dynamic_table.dropna(axis=1, how='all')
-            chan_cols = [c for c in self.dynamic_table.columns if 'ph_' in c]
+            chan_cols = [c for c in self.dynamic_table.columns
+                         if self.data_type_prefix in c]
         # How many viable channels remain?
-        viable_chan = [c for c in self.dynamic_table.columns if 'ph_' in c]
+        viable_chan = [c for c in self.dynamic_table.columns
+                       if self.data_type_prefix in c]
         self.num_viable = len(viable_chan)
 
         # Remove trials that contain all zero values for channels
@@ -611,6 +651,7 @@ class SubjectMontageDataset(Dataset):
         assert sum(props) == 100
 
         self.data = data
+        self.data_type_prefix = data.data_type_prefix
         self.props = props
         self.proportions = dict(zip(subsets, self.props))
         self.subset = subset
@@ -628,7 +669,8 @@ class SubjectMontageDataset(Dataset):
         self.labels = self.data.labels
         self.trial_id = self.data.trial_id
         self.dynamic_table = self.data.dynamic_table
-        self.chan_cols = [c for c in self.dynamic_table.columns if 'ph_' in c]
+        self.chan_cols = [c for c in self.dynamic_table.columns
+                          if self.data_type_prefix in c]
         self.idxs = self.data.idxs
 
         pd.set_option('mode.chained_assignment', 'raise')
@@ -689,7 +731,8 @@ class SubjectMontageDataset(Dataset):
             self.dynamic_table['idx'].isin(self.idxs), :]
 
         # Fill zero channels with NaN
-        chan_cols = [c for c in self.dynamic_table.columns if 'ph_' in c]
+        chan_cols = [c for c in self.dynamic_table.columns
+                     if self.data_type_prefix in c]
         self.dynamic_table.loc[:, chan_cols].replace(0, np.nan, inplace=True)
 
         # Get a list of NaN columns that require imputation
@@ -874,6 +917,7 @@ class LeaveOneOutSplitSubjectMontageDataset(Dataset):
         assert sum(props) == 100
 
         self.data = learn_data
+        self.data_type_prefix = learn_data.data_type_prefix
         self.test_data = test_data
         self.props = props
         self.proportions = dict(zip(subsets, self.props))
@@ -892,7 +936,8 @@ class LeaveOneOutSplitSubjectMontageDataset(Dataset):
         self.labels = self.data.labels
         self.trial_id = self.data.trial_id
         self.dynamic_table = self.data.dynamic_table
-        self.chan_cols = [c for c in self.dynamic_table.columns if 'ph_' in c]
+        self.chan_cols = [c for c in self.dynamic_table.columns
+                          if self.data_type_prefix in c]
         self.idxs = self.data.idxs
 
         self.test_labels = self.test_data.labels
@@ -954,7 +999,8 @@ class LeaveOneOutSplitSubjectMontageDataset(Dataset):
                 self.test_dynamic_table['idx'].isin(self.idxs), :]
 
         # Fill zero channels with NaN
-        chan_cols = [c for c in self.dynamic_table.columns if 'ph_' in c]
+        chan_cols = [c for c in self.dynamic_table.columns
+                     if self.data_type_prefix in c]
         self.dynamic_table.loc[:, chan_cols].replace(0, np.nan, inplace=True)
 
         # Get a list of NaN columns that require imputation

@@ -41,12 +41,14 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             # Set up Datasets and DataLoaders
             data = SubjectData(
                 os.path.join(
-                    constants.SUBJECTS_DIR,
+                    constants.PH_SUBJECTS_DIR
+                    if args.data_type == 'ph'
+                    else constants.DC_SUBJECTS_DIR,
                     'voxel_space' if args.voxel_space else 'channel_space',
                     args.anchor, args.preprocessing_dir, args.data_path),
                 subject, montage_list,
                 args.classification_task, args.n_montages, args.filter_zeros,
-                args.voxel_space)
+                args.voxel_space, args.data_type)
             # Get number of input channels
             args.num_channels = data.get_num_viable_channels()
 
@@ -146,7 +148,8 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             del model
 
     except Exception as e:
-        del model
+        if 'model' in locals():
+            del model
         traceback.print_exc()
         print(flush=True)
         raise e
@@ -498,6 +501,8 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('expt_name', type=str, help='Experiment name')
+    parser.add_argument('--data_type', type=str, choices=['ph', 'dc'],
+                        default='ph')
     parser.add_argument('--data_path', type=str, help='Path to data',
                         default='avg')
     parser.add_argument('--subset_subject_ids', action='store_true',

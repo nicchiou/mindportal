@@ -40,7 +40,7 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
             # Set up Datasets and DataLoaders
             data = SubjectMontageData(
                 os.path.join(
-                    constants.SUBJECTS_DIR, args.anchor, args.data_path),
+                    constants.PH_SUBJECTS_DIR, args.anchor, args.data_path),
                 subject, montage,
                 args.classification_task, 156,
                 args.filter_zeros, args.average_chan, args.max_abs_scale)
