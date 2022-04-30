@@ -17,6 +17,24 @@ def load_architecture(device: torch.device, args: argparse.Namespace):
                                   D=args.num_spatial_filters,
                                   F2=args.num_pointwise_filters,
                                   p=args.dropout, fs=args.fs, T=args.seq_len)
+    elif args.arch == 'dual_input_cnn':
+        A_params = {
+            'C': args.num_channels[0],
+            'F1': args.num_temporal_filters[0],
+            'D': args.num_spatial_filters[0],
+            'F2': args.num_pointwise_filters[0],
+            'p': args.dropout[0],
+        }
+        B_params = {
+            'C': args.num_channels[1],
+            'F1': args.num_temporal_filters[1],
+            'D': args.num_spatial_filters[1],
+            'F2': args.num_pointwise_filters[1],
+            'p': args.dropout[1],
+        }
+        model = DualSpatiotemporalCNN(A_params=A_params,
+                                      B_params=B_params,
+                                      fs=args.fs, T=args.seq_len)
     elif args.arch == 'fcn':
         model = FCN(F1=args.num_temporal_filters,
                     S=args.num_depthwise_channels,
@@ -81,6 +99,46 @@ class SpatiotemporalCNN(nn.Module):
 
         # Classification
         x = torch.flatten(x, 1, -1)                         # (F2 * (T // 8))
+        x = self.fc(x)
+
+        return x
+
+
+class DualSpatiotemporalCNN(nn.Module):
+    """
+    Spatiotemporal CNN that lears separate spastiotemporal filters for
+    each input data stream.
+    """
+    def __init__(self, A_params: dict, B_params: dict,
+                 fs: int = 40, T: int = 56):
+        """
+        Initializes two SpatiotemporalCNN modules and combines their outputs.
+        :param A_params: initialization parameters for the first input.
+        :param B_params: initialization parameterse for the second input.
+        :param fs: sampling frequency (same for both inputs).
+        :param T: number of time points (same for both inputs).
+        """
+        super().__init__()
+
+        self.CNN_A = SpatiotemporalCNN(**A_params, fs=fs, T=T)
+        self.CNN_B = SpatiotemporalCNN(**B_params, fs=fs, T=T)
+
+        # Remove the final dense layer from both models and define one for the
+        # concatenated output.
+        self.CNN_A.fc = nn.Identity()
+        self.CNN_B.fc = nn.Identity()
+        self.fc = ConstrainedDense(
+            0.25, (A_params['F2'] + B_params['F2']) * (T // 8), 1)
+
+    def forward(self, a, b):
+
+        a, b = a.type(torch.cuda.FloatTensor), b.type(torch.cuda.FloatTensor)
+
+        # Spatiotemporal filtering
+        a, b = self.CNN_A(a), self.CNN_B(b)
+
+        # Classification
+        x = torch.cat((a, b), -1)
         x = self.fc(x)
 
         return x

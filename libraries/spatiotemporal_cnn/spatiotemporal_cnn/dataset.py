@@ -1205,6 +1205,56 @@ class DatasetBuilder:
                         seed=seed, seed_cv=seed_cv, **self.preprocessing))
 
 
+class DualDatasetBuilder:
+    def __init__(self, data_A: FOSData, data_B: FOSData,
+                 seed: int = 42, seed_cv: int = 15, **preprocessing):
+        self.data_A = data_A
+        self.data_B = data_B
+        self.seed = seed
+        self.seed_cv = seed_cv
+        self.preprocessing = preprocessing
+
+    def build_datasets(self, cv: int, nested_cv: int) -> Iterable[
+            Tuple[Iterable[Tuple[FOSData, FOSData]], FOSData]]:
+        """
+        Yields Datasets in the tuple form ((train, valid), test), where
+        the inner tuple is iterated over for each cross-validation split.
+        To be used with cross-validation. cv, number of cross-validation folds
+        nested_cv, number of unique test sets to generate (typically just one)
+        """
+        seed = self.seed
+        seed_cv = self.seed_cv
+
+        # Iterate through possible test sets (typically just use one)
+        for i in range(nested_cv):
+            def _inner_loop(data: FOSData, seed: int, seed_cv: seed):
+                # Iterate through cross-validation folds and yield train and
+                # valid Datasets
+                for j in range(cv):
+                    train_dataset = SubjectMontageDataset(
+                        data=data, subset='train', stratified=True,
+                        cv=cv, nested_cv=nested_cv, cv_idx=j, nested_cv_idx=i,
+                        seed=seed, seed_cv=seed_cv, **self.preprocessing)
+                    valid_dataset = SubjectMontageDataset(
+                        data=data, subset='valid', stratified=True,
+                        cv=cv, nested_cv=nested_cv, cv_idx=j, nested_cv_idx=i,
+                        seed=seed, seed_cv=seed_cv, **self.preprocessing)
+                    yield (train_dataset, valid_dataset)
+
+            test_dataset_A = SubjectMontageDataset(
+                data=self.data_A, subset='test', stratified=True, cv=cv,
+                nested_cv=nested_cv, cv_idx=0, nested_cv_idx=i,
+                seed=seed, seed_cv=seed_cv, **self.preprocessing)
+            test_dataset_B = SubjectMontageDataset(
+                data=self.data_B, subset='test', stratified=True, cv=cv,
+                nested_cv=nested_cv, cv_idx=0, nested_cv_idx=i,
+                seed=seed, seed_cv=seed_cv, **self.preprocessing)
+            yield ((_inner_loop(self.data_A, self.seed, self.seed_cv)),
+                   test_dataset_A,
+                   (_inner_loop(self.data_B, self.seed, self.seed_cv)),
+                   test_dataset_B)
+
+
 class LeaveOneOutDatasetBuilder:
     def __init__(self, learn_data: FOSData, test_data: FOSData,
                  seed: int = 42, seed_cv: int = 15, **preprocessing):
