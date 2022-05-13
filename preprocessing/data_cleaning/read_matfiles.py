@@ -116,11 +116,13 @@ if __name__ == '__main__':
                 ac_data = np.rot90(ac_data, axes=(0, 1))
                 ph_data = np.rot90(ph_data, axes=(0, 1))
 
+                # Keep track of signals over all trials to save to a file
                 all_trials = pd.DataFrame()
                 all_dc_signals = pd.DataFrame()
                 all_ac_signals = pd.DataFrame()
                 all_ph_signals = pd.DataFrame()
 
+                # Iterate over trials to store relevant signals
                 for trial in range(events.shape[0]):
 
                     single_trial = pd.DataFrame()
@@ -173,6 +175,7 @@ if __name__ == '__main__':
                                 [f'ph_{montage}_R_{voxel}'
                                  for voxel in range(ph_R.shape[0])]
                     )
+                    # Save as a sequence for input into neural methods
                     if args.save_subject_ts:
 
                         dc_signals = pd.DataFrame(
@@ -303,11 +306,13 @@ if __name__ == '__main__':
                 win_start = [int(np.floor((float(x) / 1000) * fs))
                              for x in range(0, 4500, 500)]
 
+                # Keep track of signals over all trials to save to a file
                 all_trials = pd.DataFrame()
                 all_dc_signals = pd.DataFrame()
                 all_ac_signals = pd.DataFrame()
                 all_ph_signals = pd.DataFrame()
 
+                # Iterate over trials to store relevant signals
                 for trial in range(events.shape[0]):
 
                     single_trial = pd.DataFrame()
@@ -325,6 +330,7 @@ if __name__ == '__main__':
                                 [f'ph_{montage}_{chan}'
                                  for chan in range(ph_data.shape[1])]
                     )
+                    # Save as a sequence for input into neural methods
                     if args.save_subject_ts:
 
                         dc_signals = pd.DataFrame(
