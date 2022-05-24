@@ -12,9 +12,12 @@ import numpy as np
 import pandas as pd
 import torch
 from ray import tune
+from ray.tune.suggest.ax import AxSearch
+from ray.tune.suggest.basic_variant import BasicVariantGenerator
 from sklearn.metrics import roc_auc_score
 from spatiotemporal_cnn.dataset_bci import DatasetBuilder, SingleSubjectData
 from spatiotemporal_cnn.models_bci import SpatiotemporalCNN
+from spatiotemporal_cnn.ray_tune import TrialTerminationReporter
 from spatiotemporal_cnn.utils import deterministic, evaluate, run_inference
 from torch.utils.data import DataLoader
 # (https://github.com/ufoym/imbalanced-dataset-sampler)
@@ -55,7 +58,7 @@ def train_with_configs(config, args: argparse.Namespace,
             max_abs_scale=args.max_abs_scale,
             impute=args.imputation_method)
 
-        results = pd.DataFrame(columns=['cv_fold'])
+        cv_results = pd.DataFrame(columns=['cv_fold'])
 
         # Start with the same model initial state
         model = SpatiotemporalCNN(
@@ -154,7 +157,7 @@ def train_with_configs(config, args: argparse.Namespace,
                     checkpoint_suffix=checkpoint_suffix)
                 fold_results['cv_fold'] = int(checkpoint_suffix)
                 fold_results['Status'] = 'PASS'
-                results = results.append(fold_results, ignore_index=True)
+                cv_results = cv_results.append(fold_results, ignore_index=True)
 
                 # Save trained model checkpoint
                 with tune.checkpoint_dir(
@@ -172,9 +175,16 @@ def train_with_configs(config, args: argparse.Namespace,
         print(flush=True)
         raise e
 
+    # Save cross-validation results to .csv
+    cv_results.to_csv(os.path.join(tune.get_trial_dir(), 'trial_results.csv'),
+                      index=False)
+
     # Compute trial results across cross-validation folds and send to Ray Tune
-    trial_results = results.mean().drop(labels=['cv_fold']).to_dict()
+    trial_results = cv_results.mean().drop(labels=['cv_fold']).to_dict()
+    trial_results['subject_id'] = args.subject
     trial_results['C'] = args.num_features
+
+    # Report result (same as tune.report)
     return trial_results
 
 
@@ -355,7 +365,7 @@ def train(subject: str, args: argparse.Namespace, train_loader: DataLoader,
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= args.early_stop:
-                fold_results['epoch_early_stop'] = epoch + 1
+                fold_results['epoch_early_stop'] = epoch
                 if args.early_stop != -1:
                     if args.verbose:
                         print('\nEarly stopping...\n', flush=True)
@@ -373,11 +383,8 @@ def train(subject: str, args: argparse.Namespace, train_loader: DataLoader,
         print('Best valid loss: {:4f}'.format(best_valid_loss), flush=True)
         print(flush=True)
 
-    # ======== EVALUATE FINAL MODEL ON TRAINING SET ======== #
-    final_metrics_train = evaluate(true_train, pred_train, prob_train)
-
-    # ======== EVALUTE FINAL MODEL ON VALIDATION SET ======== #
-    final_metrics_valid = evaluate(true_valid, pred_valid, prob_valid)
+    # Evaluate model on test set
+    metrics_test = run_inference(model, device, test_loader, criterion)
 
     # ======== SUMMARY ======== #
     fold_results['subject_id'] = subject
@@ -392,165 +399,11 @@ def train(subject: str, args: argparse.Namespace, train_loader: DataLoader,
     for metric, value in metrics_train.items():
         fold_results['train_' + metric] = value
     for metric, value in metrics_valid.items():
-        try:
-            if args.early_stop != -1:
-                assert (
-                    (value == best_valid_metrics[metric]) or
-                    (np.isnan(value) and np.isnan(best_valid_metrics[metric]))
-                )
-        except AssertionError:
-            print(value, best_valid_metrics[metric])
         fold_results['valid_' + metric] = value
-    # Save metrics of final model at early stopping
-    if args.early_stop != -1:
-        for metric, value in final_metrics_train.items():
-            fold_results['final_train_' + metric] = value
-        for metric, value in final_metrics_valid.items():
-            fold_results['final_valid_' + metric] = value
+    for metric, value in metrics_test.items():
+        fold_results['test_' + metric] = value
 
     return fold_results, model
-
-
-def get_cross_validation_results(config, best_checkpoint_dir: str,
-                                 args: argparse.Namespace):
-    """
-    Evaluate model with the best configuration of hyperparameters and get
-    results for train, valid, and test splits.
-    """
-    deterministic(args.train_seed)
-
-    try:
-        # Set up Datasets and DataLoaders
-        data_dir = os.path.join(
-            constants.PH_SUBJECTS_DIR
-            if args.data_type == 'ph' else constants.DC_SUBJECTS_DIR,
-            'bci', args.input_space, args.data_path
-        )
-        bci_data = SingleSubjectData(
-            data_dir=data_dir,
-            subject_id=args.subject,
-            train_submontages=args.train_submontages,
-            classification_task=args.classification_task,
-            expt_type=args.expt_type,
-            filter_zeros=args.filter_zeros,
-            input_space=args.input_space,
-            data_type=args.data_type
-        )
-
-        # Get number of available features
-        args.num_features = bci_data.get_num_viable_features()
-
-        db = DatasetBuilder(
-            data=bci_data, seed=args.seed, seed_cv=args.seed_cv,
-            max_abs_scale=args.max_abs_scale,
-            impute=args.imputation_method)
-
-        results = pd.DataFrame(columns=['cv_fold'])
-
-        # Start with the same model initial state
-        model = SpatiotemporalCNN(
-            C=config['C'],        # number of input channels/voxels
-            F1=config['F1'],      # number of temporal filters
-            D=config['D'],        # number of spatial filters
-            F2=config['F2'],      # number of pointwise filters
-            p=config['dropout'],  # probability of dropout
-            fs=config['fs'],      # sampling frequency
-            T=config['T']         # sequence length
-        )
-
-        # Put model on GPU
-        device = 'cpu'
-        if torch.cuda.is_available():
-            device = 'cuda:0'
-            if torch.cuda.device_count() > 1:
-                model = torch.nn.DataParallel(model)
-        model.to(device)
-
-        # Cross-validation loop
-        for i, (inner_train_valids, test_dataset) in enumerate(
-                db.build_datasets(cv=args.cross_val,
-                                  nested_cv=args.nested_cross_val)):
-
-            for j, (train_dataset, valid_dataset) in enumerate(
-                    inner_train_valids):
-
-                valid_dataset.impute_chan(train_dataset)
-                test_dataset.impute_chan(train_dataset)
-
-                train_loader = DataLoader(
-                    train_dataset, batch_size=args.batch_size, shuffle=True)
-                valid_loader = DataLoader(
-                    valid_dataset, batch_size=args.batch_size, shuffle=False)
-                test_loader = DataLoader(
-                    test_dataset, batch_size=args.batch_size, shuffle=False)
-
-                if args.nested_cross_val > 1 and args.cross_val > 1:
-                    raise NotImplementedError(
-                        'Nested cross validation not supported.')
-                # Multiple learn / test splits -
-                # checkpoint named for the enumeration of
-                # learn / test splits
-                elif args.nested_cross_val > 1:
-                    checkpoint_suffix = str(i)
-                # Multiple train / valid splits -
-                # checkpoint named for the enumeration of
-                # train / valid splits
-                elif args.cross_val > 1:
-                    checkpoint_suffix = str(j)
-                # No cross-validation
-                else:
-                    checkpoint_suffix = ''
-
-                # Initialize criterion (binary)
-                if args.criterion == 'bce':
-                    criterion = torch.nn.BCELoss()
-                elif args.criterion == 'bce_logits':
-                    label_count = Counter(train_dataset.labels)
-                    pos_weight = torch.Tensor(
-                        [label_count[0] / label_count[1]]).to(device)
-                    criterion = torch.nn.BCEWithLogitsLoss(
-                        pos_weight=pos_weight)
-                else:
-                    raise NotImplementedError('Criterion not implemented')
-
-                # Load best model from checkpoint_dir
-                model_state, optimizer_state = torch.load(os.path.join(
-                    best_checkpoint_dir, f'checkpoint_{checkpoint_suffix}',
-                    'checkpoint.pt'))
-
-                # Evaluate one cross-validation split
-                model.load_state_dict(model_state)
-                fold_results = dict()
-                train_results = run_inference(model, device, train_loader,
-                                              criterion)
-                valid_results = run_inference(model, device, valid_loader,
-                                              criterion)
-                test_results = run_inference(model, device, test_loader,
-                                             criterion)
-
-                # SUMMARY
-                for metric, value in train_results.items():
-                    fold_results['train_' + metric] = value
-                for metric, value in valid_results.items():
-                    fold_results['valid_' + metric] = value
-                for metric, value in test_results.items():
-                    fold_results['test_' + metric] = value
-                fold_results['cv_fold'] = int(checkpoint_suffix)
-                fold_results['Status'] = 'PASS'
-                results = results.append(fold_results, ignore_index=True)
-
-        del model
-
-    except Exception as e:
-        if 'model' in locals():
-            del model
-        traceback.print_exc()
-        print(flush=True)
-        raise e
-
-    # Compute trial results across cross-validation folds and send to Ray Tune
-    trial_results = results.mean().drop(labels=['cv_fold']).to_dict()
-    return results
 
 
 def main(args: argparse.Namespace, exp_dir: str):
@@ -559,7 +412,7 @@ def main(args: argparse.Namespace, exp_dir: str):
     """
     # Search algorithm
     if args.search_algo == 'grid':
-        algo = tune.suggest.basic_variant.BasicVariantGenerator()
+        algo = BasicVariantGenerator()
         F1_search_space = tune.grid_search([6, 8, 12])
         D_search_space = tune.grid_search([6, 8, 12])
         F2_search_space = tune.grid_search([6, 8, 12])
@@ -567,6 +420,15 @@ def main(args: argparse.Namespace, exp_dir: str):
         batch_size_search_space = args.batch_size
         dropout_search_space = args.dropout
         l2_search_space = args.weight_decay
+    elif args.search_algo == 'bayes_opt':
+        algo = AxSearch(metric='valid_accuracy', mode='max')
+        F1_search_space = tune.qrandint(4, 18, 2)
+        D_search_space = tune.qrandint(4, 24, 2)
+        F2_search_space = tune.qrandint(4, 18, 2)
+        lr_search_space = tune.loguniform(1e-4, 1e-2)
+        batch_size_search_space = tune.qrandint(8, 32, 4)
+        dropout_search_space = tune.uniform(0.4, 0.6)
+        l2_search_space = tune.loguniform(1e-4, 1e-2)
     # Search space
     config = {
         'fs': args.fs,
@@ -590,34 +452,35 @@ def main(args: argparse.Namespace, exp_dir: str):
         num_samples=args.num_samples,
         local_dir=exp_dir,
         sync_config=tune.SyncConfig(syncer=None),
+        progress_reporter=TrialTerminationReporter(),
+        log_to_file=('my_stdout.log', 'my_stderr.log')
     )
 
     # Save the best config and model, load to device for evaluation
     best_trial = result.get_best_trial('valid_accuracy', 'max', 'last')
     print('Best trial config: {}'.format(best_trial.config))
-    print('Best trial final validation loss: {}'.format(
+    print('Best trial validation loss: {}'.format(
         best_trial.last_result['valid_loss']))
-    print('Best trial final validation accuracy: {}'.format(
+    print('Best trial validation accuracy: {}'.format(
         best_trial.last_result['valid_accuracy']))
-
-    best_config = result.get_best_config('valid_accuracy', 'max', 'last')
-
-    # Get checkpoint directory for the best trial
-    best_checkpoint_dir = result.get_best_logdir(
-        'valid_accuracy', 'max', 'last')
-
-    # Evaluate model for cross-validation folds
-    trial_result = get_cross_validation_results(
-        best_config, best_checkpoint_dir, args)
     print('Best trial test set accuracy: {}'.format(
-        trial_result['test_accuracy']))
+        best_trial.last_result['test_accuracy']))
+
+    # Save best configuration
+    best_config = result.get_best_config('valid_accuracy', 'max', 'last')
+    with open(os.path.join(exp_dir, 'best_config.json'), 'w') as f:
+        json.dump(best_config, f, indent=2)
+
+    # Get logging directory for the best trial and read in trial results
+    best_log_dir = result.get_best_logdir('valid_accuracy', 'max', 'last')
+    cv_result = pd.read_csv(os.path.join(best_log_dir, 'trial_results.csv'))
 
     # Save best trial result to file
     try:
         result_df = pd.read_csv(os.path.join(exp_dir, 'trial_results.csv'))
     except OSError:
         result_df = pd.DataFrame()
-    result_df = result_df.append(trial_result, ignore_index=True)
+    result_df = result_df.append(cv_result, ignore_index=True)
     result_df.to_csv(os.path.join(exp_dir, 'trial_results.csv'), index=False)
 
 
@@ -657,9 +520,6 @@ if __name__ == '__main__':
                         help='Number of input channels to the model')
     parser.add_argument('--num_temporal_filters', type=int, default=12,
                         help='Number of temporal/frequency filters')
-    parser.add_argument('--num_depthwise_channels', type=int, default=48,
-                        help='Number of channels to compute depthwise '
-                        'convolutions over for variable input dimension')
     parser.add_argument('--num_spatial_filters', type=int, default=12,
                         help='Number of spatial filters per temporal filter')
     parser.add_argument('--num_pointwise_filters', type=int, default=12,
@@ -720,8 +580,7 @@ if __name__ == '__main__':
                         'library instead of using the specified '
                         'hyperparameters from args.')
     parser.add_argument('--search_algo', type=str, default='bayes_opt',
-                        choices=['grid', 'blend', 'cfo', 'dragonfly',
-                                 'hyper_opt', 'optuna', 'zo_opt'])
+                        choices=['grid', 'bayes_opt'])
     parser.add_argument('--num_samples', type=int, default=30)
     parser.add_argument('--gpus_per_trial', type=float, default=0.5)
 
