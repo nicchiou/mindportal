@@ -1,6 +1,7 @@
 import numpy as np
 
 
+# PSC Data
 def combine_motor_LR(x):
     """
     Combines trial types for left motor responses and right motor responses.
@@ -74,5 +75,20 @@ def response_stim_modality_labels(x):
         return 6
     elif x in [12, 16]:
         return 7
+    else:
+        return np.nan
+
+
+# BCI Data
+def combine_motor_response(x):
+    """
+    Combines trial types for left motor responses and right motor responses.
+
+    0 represents left and 1 represents right.
+    """
+    if x in [2, 4]:
+        return 0
+    elif x in [1, 3]:
+        return 1
     else:
         return np.nan

@@ -19,10 +19,15 @@ AC_SUBJECTS_DIR = os.path.join(AC_DATA_DIR, 'subject_time_series')
 PH_SUBJECTS_DIR = os.path.join(PHASE_DATA_DIR, 'subject_time_series')
 
 RESULTS_DIR = os.path.join(SHARED_DIR, 'mindportal')
+PSC_RESULTS_DIR = os.path.join(RESULTS_DIR, 'psc')
+BCI_RESULTS_DIR = os.path.join(RESULTS_DIR, 'bci')
 
 SUBJECT_IDS = ['127', '146', '149', '150', '151', '152', '153', '154', '155',
                '157', '505', '516']
 SUBSET_SUBJECT_IDS = ['127', '146', '152', '154', '155', '505']
-SUBMONTAGES = ['a', 'b', 'c']
 MONTAGES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 PAIRED_MONTAGES = ['A', 'B', 'C', 'D']
+
+BCI_SUBJECTS_MOT = ['0535', '2801', '2802', '2804', '2805']
+BCI_SUBJECTS_GAM = ['2800', '2801', '2802', '2804', '2805']
+SUBMONTAGES = ['a', 'b', 'c']

@@ -3,7 +3,6 @@ import os
 import random
 
 import numpy as np
-import pandas as pd
 import torch
 from sklearn import metrics
 
@@ -31,7 +30,43 @@ class NumpyEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
-def evaluate(true: list, pred: list, prob: list):
+def run_inference(model, device, data_loader, criterion):
+    """
+    Given a model, device, and dataloader, this function runs inference and
+    evaluates model performance on the given subset of data.
+    """
+    model.eval()
+    running_loss = 0.0
+    total = 0.0
+    prob = list()
+    pred = list()
+    true = list()
+    with torch.no_grad():
+        for _, data, labels in data_loader:
+
+            total += labels.shape[0]
+            data = data.to(device) \
+                if isinstance(data, torch.Tensor) \
+                else [i.to(device) for i in data]
+            labels = labels.to(device)
+
+            outputs = model(data).squeeze()
+            probabilities = torch.sigmoid(outputs)
+            predicted = probabilities > 0.5
+            loss = criterion(outputs, labels)
+
+            prob.extend(probabilities.data.tolist())
+            pred.extend(predicted.data.tolist())
+            true.extend(labels.data.tolist())
+
+            running_loss += loss.item() * data.size(0)
+
+    metrics = evaluate(true, pred, prob)
+    metrics['loss'] = running_loss / total
+    return metrics
+
+
+def evaluate(true, pred, prob):
     """
     Given the true labels and the model's predictions and predicted
     probabilities of the positive class, this function evaluates the accuracy,
@@ -68,30 +103,3 @@ def evaluate(true: list, pred: list, prob: list):
         pass
 
     return eval_metrics
-
-
-def save_predictions(subject_id: str, montage: str,
-                     true: list, pred: list, prob: list,
-                     exp_dir: str, subset: str, checkpoint_suffix: str = '',
-                     final: bool = False):
-    """
-    Writes a DataFrame containing the predictions for a given cross-validation
-    iteration, along with the true labels and probabilities (confidence).
-    """
-
-    result_df = pd.DataFrame(
-        columns=['subject_id', 'montage', 'cv_iter', 'true', 'pred', 'prob'])
-    cv_iter = int(checkpoint_suffix) \
-        if checkpoint_suffix.isdigit() else checkpoint_suffix
-
-    result_df['true'] = true
-    result_df['pred'] = pred
-    result_df['prob'] = prob
-    result_df.loc[:, 'subject_id'] = subject_id
-    result_df.loc[:, 'montage'] = montage
-    result_df.loc[:, 'cv_iter'] = cv_iter
-
-    result_df.to_parquet(os.path.join(
-        exp_dir, 'predictions' if not final else 'final_predictions',
-        f'{subject_id}_{montage}_{subset}_{checkpoint_suffix}.parquet'),
-        index=False)
