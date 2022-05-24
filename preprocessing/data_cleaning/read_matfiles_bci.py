@@ -30,7 +30,7 @@ if __name__ == '__main__':
                         choices=['channel_space', 'voxel_space'],
                         help='specifies whether inputs are in channel-space '
                         'or voxel-space.')
-    parser.add_argument('--experiment_type', type=str, default='mot',
+    parser.add_argument('--expt_type', type=str, default='mot',
                         choices=['mot', 'gam'])
     parser.add_argument('--subjects', nargs='+', type=int)
     parser.add_argument('--save_subject_dir', type=str,
@@ -47,13 +47,13 @@ if __name__ == '__main__':
             df_freq = pd.read_parquet(
                 os.path.join(
                     args.output_dir, args.input_space,
-                    f'{d}_{args.experiment_type}_all_single_trial.parquet'))
+                    f'{d}_{args.expt_type}_all_single_trial.parquet'))
         except OSError:
             df_freq = pd.DataFrame()
 
         files = os.listdir(os.path.join(
                            constants.MATFILE_DIR, 'bci', args.input_space, d))
-        files = [f for f in files if f.startswith(args.experiment_type)]
+        files = [f for f in files if f.startswith(args.expt_type)]
         files = [f for f in files if int(f[3:7]) in args.subjects]
 
         # Parse directory name
@@ -85,7 +85,7 @@ if __name__ == '__main__':
 
             if args.input_space == 'channel_space':
                 # Parse recording channel-space data
-                # Shape is (156, 128, num_trials), type: np.array
+                # Shape is (T, C, num_trials), type: np.array
                 dc_data = pc['trial_data'][0][0][1]
                 ac_data = pc['trial_data'][0][0][2]
                 ph_data = pc['trial_data'][0][0][3]
@@ -183,7 +183,7 @@ if __name__ == '__main__':
 
             elif args.input_space == 'voxel_space':
                 # Parse recording voxel-space data
-                # Shape is (6, 7, 56, num_trials, 2), type: np.array
+                # Shape is (w, h, T, num_trials, 2), type: np.array
                 dc_data = pc['voxel_avg'][0][0][0]
                 ac_data = pc['voxel_avg'][0][0][1]
                 ph_data = pc['voxel_avg'][0][0][2]
@@ -208,7 +208,7 @@ if __name__ == '__main__':
                     # Isolate single-trial data and flip up/down so we can
                     # index starting from the bottom-left as opposed to the
                     # top-left
-                    # Shape is (7, 6, 56, 2)
+                    # Shape is (w, h, T, 2)
                     curr_dc_data = dc_data[::-1, :, :, trial, :]
                     curr_ac_data = ac_data[::-1, :, :, trial, :]
                     curr_ph_data = ph_data[::-1, :, :, trial, :]
@@ -216,14 +216,14 @@ if __name__ == '__main__':
                     # Transpose y (row) and x (col) dimensions so we can use a
                     # simple reshape operation to flatten 2D data matrix into
                     # 1D array of voxels
-                    # Shape is (6, 7, 56, 2)
+                    # Shape is (h, w, T, 2)
                     curr_dc_data = np.transpose(curr_dc_data, (1, 0, 2, 3))
                     curr_ac_data = np.transpose(curr_ac_data, (1, 0, 2, 3))
                     curr_ph_data = np.transpose(curr_ph_data, (1, 0, 2, 3))
 
                     # Flatten 2D voxel representation into 1D, taking voxels in
                     # the positive y-direction then positive x-direction
-                    # Shape is (42, 56, 2)
+                    # Shape is (h * w, T, 2)
                     dc_signal = curr_dc_data.reshape(
                         (-1, curr_dc_data.shape[2], curr_dc_data.shape[3]))
                     ac_signal = curr_ac_data.reshape(
@@ -232,7 +232,7 @@ if __name__ == '__main__':
                         (-1, curr_ph_data.shape[2], curr_ph_data.shape[3]))
 
                     # Separate into left and right hemispheres
-                    # Shape is (42, 56)
+                    # Shape is (h * w, T)
                     dc_L, dc_R = dc_signal[:, :, 0], dc_signal[:, :, 1]
                     ac_L, ac_R = ac_signal[:, :, 0], ac_signal[:, :, 1]
                     ph_L, ph_R = ph_signal[:, :, 0], ph_signal[:, :, 1]
