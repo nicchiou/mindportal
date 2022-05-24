@@ -45,6 +45,7 @@ def internal_model_runner(gpunum: int, args: argparse.Namespace, exp_dir: str,
                         constants.PH_SUBJECTS_DIR
                         if args.data_type == 'ph'
                         else constants.DC_SUBJECTS_DIR,
+                        'psc',
                         'voxel_space' if args.voxel_space else 'channel_space',
                         args.anchor, args.preprocessing_dir, args.data_path),
                     subject, montage,
@@ -615,7 +616,7 @@ if __name__ == '__main__':
 
     # Make experimental directories for output
     exp_dir = os.path.join(
-        constants.RESULTS_DIR, args.classification_task,
+        constants.PSC_RESULTS_DIR, args.classification_task,
         'spatiotemporal_cnn',
         'voxel_space' if args.voxel_space else 'channel_space',
         args.anchor, args.preprocessing_dir,
