@@ -19,6 +19,9 @@ pyarrow = "*"
 fastparquet = "*"
 jupyterlab = "*"
 torchsampler = {file = "https://github.com/ufoym/imbalanced-dataset-sampler/archive/master.zip"}
+ray = {extras = ["rllib"], version = "*"}
+ax-platform = "*"
+sqlalchemy = "*"
 
 [dev-packages]
 flake8 = "*"
