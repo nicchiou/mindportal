@@ -6,6 +6,7 @@ from torch import nn
 from torch.nn import functional as F
 
 
+# Helper function to initialize model architecture
 def load_architecture(device: torch.device, args: argparse.Namespace):
     """
     Initializes an SpatiotemporalCNN model with the specified parameters and
@@ -45,13 +46,14 @@ def load_architecture(device: torch.device, args: argparse.Namespace):
     return model
 
 
+# Custom PyTorch modules
 class SpatiotemporalCNN(nn.Module):
     """
     CNN based on EEGNet from https://arxiv.org/pdf/1611.08024.pdf which learns
     spatiotemporal filters from multi-variate time series data.
     """
     def __init__(self, C: int, F1: int, D: int, F2: int, p: float = 0.5,
-                 fs: int = 52, T: int = 41):
+                 fs: int = 52, T: int = 75):
         """
         Initializes a new SpatiotemporalCNN module.
         :param C: number of input channels
@@ -110,7 +112,7 @@ class DualSpatiotemporalCNN(nn.Module):
     each input data stream.
     """
     def __init__(self, A_params: dict, B_params: dict,
-                 fs: int = 52, T: int = 41):
+                 fs: int = 52, T: int = 75):
         """
         Initializes two SpatiotemporalCNN modules and combines their outputs.
         :param A_params: initialization parameters for the first input.
@@ -151,7 +153,7 @@ class FCN(nn.Module):
     from multi-variate time series data.
     """
     def __init__(self, F1: int, S: int, D: int, F2: int,
-                 p: float = 0.5, fs: int = 52, T: int = 41):
+                 p: float = 0.5, fs: int = 52, T: int = 75):
         """
         Initializes a new SpatiotemporalCNN module.
         :param F1: number of temporal filters
@@ -214,6 +216,7 @@ class FCN(nn.Module):
         return x
 
 
+# Custom layer types
 class ConstrainedConv2d(nn.Conv2d):
     """
     Allows the weights of a convolutional layer to be constrained by a
