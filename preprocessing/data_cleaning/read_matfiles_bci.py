@@ -64,8 +64,8 @@ if __name__ == '__main__':
             # Parse file name
             exp_name = f[:3]
             subject_id = f[3:7]
-            montage = f[7]
-            assert montage in constants.SUBMONTAGES
+            montage = f.split('.')[0][7:]
+            assert montage in constants.SUBMONTAGES or montage == 'abc'
 
             # Read .mat file
             pc = sio.loadmat(os.path.join(
@@ -182,11 +182,14 @@ if __name__ == '__main__':
                     df_freq = df_freq.append(all_trials, ignore_index=True)
 
             elif args.input_space == 'voxel_space':
+                # Enforce different pre-processing steps for individual sub-
+                # montage data v.s. averaged data
+                voxel_key = 'voxel_avg' if montage == 'abc' else 'voxel'
                 # Parse recording voxel-space data
                 # Shape is (w, h, T, num_trials, 2), type: np.array
-                dc_data = pc['voxel_avg'][0][0][0]
-                ac_data = pc['voxel_avg'][0][0][1]
-                ph_data = pc['voxel_avg'][0][0][2]
+                dc_data = pc[voxel_key][0][0][0]
+                ac_data = pc[voxel_key][0][0][1]
+                ph_data = pc[voxel_key][0][0][2]
 
                 # Rotate data matrix to align with diagram: y-coordinate
                 # specifies row and x-coordinate specifies column
@@ -209,9 +212,14 @@ if __name__ == '__main__':
                     # index starting from the bottom-left as opposed to the
                     # top-left
                     # Shape is (w, h, T, 2)
-                    curr_dc_data = dc_data[::-1, :, :, trial, :]
-                    curr_ac_data = ac_data[::-1, :, :, trial, :]
-                    curr_ph_data = ph_data[::-1, :, :, trial, :]
+                    if montage == 'abc':
+                        curr_dc_data = dc_data[::-1, :, :, trial, :]
+                        curr_ac_data = ac_data[::-1, :, :, trial, :]
+                        curr_ph_data = ph_data[::-1, :, :, trial, :]
+                    else:
+                        curr_dc_data = dc_data[::-1, :, :, trial, :, 0]
+                        curr_ac_data = ac_data[::-1, :, :, trial, :, 0]
+                        curr_ph_data = ph_data[::-1, :, :, trial, :, 0]
 
                     # Transpose y (row) and x (col) dimensions so we can use a
                     # simple reshape operation to flatten 2D data matrix into

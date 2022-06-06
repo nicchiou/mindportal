@@ -34,7 +34,12 @@ class IncludedExcludedSubjectData(BCIData):
         self.data_type_prefix = f'{data_type}_'
 
         # Make assertions about the montages and subjects included for training
-        assert set(train_submontages).issubset(set(constants.SUBMONTAGES))
+        if input_space == 'channel_space':
+            assert set(train_submontages).issubset(set(constants.SUBMONTAGES))
+        elif input_space == 'voxel_space':
+            assert (
+                train_submontages[0] == 'abc' or
+                set(train_submontages).issubset(set(constants.SUBMONTAGES)))
         assert set(included_subjects).issubset(set(constants.SUBJECT_IDS))
         assert set(excluded_subjects).issubset(set(constants.SUBJECT_IDS))
 
@@ -78,13 +83,16 @@ class IncludedExcludedSubjectData(BCIData):
         meta_cols = ['trial_num', 'subject_id', 'montage']
         feat_cols = [c for c in self.data.columns
                      if self.data_type_prefix in c]
-        expected_features = 0
-        if 'a' in train_submontages:
-            expected_features += 192
-        if 'b' in train_submontages:
-            expected_features += 192
-        if 'c' in train_submontages:
-            expected_features += 96
+        if input_space == 'channel_space':
+            expected_features = 0
+            if 'a' in train_submontages:
+                expected_features += 192
+            if 'b' in train_submontages:
+                expected_features += 192
+            if 'c' in train_submontages:
+                expected_features += 96
+        elif input_space == 'voxel_space':
+            expected_features = 2 * 49
         assert len(feat_cols) == expected_features
         self.meta_data = self.data.loc[:, meta_cols]
         self.dynamic_table = self.data.loc[:, feat_cols + ['trial_num']]
@@ -175,7 +183,12 @@ class SingleSubjectData(BCIData):
 
         # Make assertions about the montage list matching the number of
         # montages
-        assert set(train_submontages).issubset(set(constants.SUBMONTAGES))
+        if input_space == 'channel_space':
+            assert set(train_submontages).issubset(set(constants.SUBMONTAGES))
+        elif input_space == 'voxel_space':
+            assert (
+                train_submontages[0] == 'abc' or
+                set(train_submontages).issubset(set(constants.SUBMONTAGES)))
 
         prev_trial_nums = list()
         for i, submontage in enumerate(train_submontages):
@@ -204,13 +217,16 @@ class SingleSubjectData(BCIData):
         meta_cols = ['trial_num', 'subject_id', 'montage']
         feat_cols = [c for c in self.data.columns
                      if self.data_type_prefix in c]
-        expected_features = 0
-        if 'a' in train_submontages:
-            expected_features += 192
-        if 'b' in train_submontages:
-            expected_features += 192
-        if 'c' in train_submontages:
-            expected_features += 96
+        if input_space == 'channel_space':
+            expected_features = 0
+            if 'a' in train_submontages:
+                expected_features += 192
+            if 'b' in train_submontages:
+                expected_features += 192
+            if 'c' in train_submontages:
+                expected_features += 96
+        elif input_space == 'voxel_space':
+            expected_features = 2 * 49
         assert len(feat_cols) == expected_features
         self.meta_data = self.data.loc[:, meta_cols]
         self.dynamic_table = self.data.loc[:, feat_cols + ['trial_num']]
@@ -315,10 +331,13 @@ class SubjectSubmontageData(BCIData):
         meta_cols = ['trial_num', 'subject_id', 'montage']
         feat_cols = [c for c in self.data.columns
                      if self.data_type_prefix in c]
-        if submontage == 'a' or submontage == 'b':
-            assert len(feat_cols) == 192
-        elif submontage == 'c':
-            assert len(feat_cols) == 96
+        if input_space == 'channel_space':
+            if submontage == 'a' or submontage == 'b':
+                assert len(feat_cols) == 192
+            elif submontage == 'c':
+                assert len(feat_cols) == 96
+        elif input_space == 'voxel_space':
+            assert len(feat_cols) == 2 * 49
         self.meta_data = self.data.loc[:, meta_cols]
         self.dynamic_table = self.data.loc[:, feat_cols + ['trial_num']]
         # Labels correspond to the trial type of a specific trial number
