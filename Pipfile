@@ -18,10 +18,12 @@ torchvision = "==0.9.0"
 pyarrow = "*"
 fastparquet = "*"
 jupyterlab = "*"
-torchsampler = {file = "https://github.com/ufoym/imbalanced-dataset-sampler/archive/master.zip"}
 ray = {extras = ["rllib"], version = "*"}
 ax-platform = "*"
 sqlalchemy = "*"
+dragonfly-opt = "*"
+hyperopt = "*"
+zoopt = "*"
 
 [dev-packages]
 flake8 = "*"
