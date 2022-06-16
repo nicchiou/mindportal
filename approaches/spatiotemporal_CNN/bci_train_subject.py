@@ -2,6 +2,7 @@ import argparse
 import copy
 import json
 import os
+import shutil
 import sys
 import time
 import traceback
@@ -12,13 +13,18 @@ import numpy as np
 import pandas as pd
 import torch
 from ray import tune
+from ray.tune import CLIReporter
+from ray.tune.suggest import ConcurrencyLimiter
 from ray.tune.suggest.ax import AxSearch
 from ray.tune.suggest.basic_variant import BasicVariantGenerator
+from ray.tune.suggest.hyperopt import HyperOptSearch
+from ray.tune.suggest.zoopt import ZOOptSearch
 from sklearn.metrics import roc_auc_score
 from spatiotemporal_cnn.dataset_bci import DatasetBuilder, SingleSubjectData
 from spatiotemporal_cnn.models_bci import SpatiotemporalCNN
-from spatiotemporal_cnn.ray_tune import TrialTerminationReporter
-from spatiotemporal_cnn.utils import deterministic, evaluate, run_inference
+from spatiotemporal_cnn.ray_tune import ExperimentPlateauAcrossTrialsStopper
+from spatiotemporal_cnn.utils import (deterministic, evaluate, run_inference,
+                                      save_predictions)
 from torch.utils.data import DataLoader
 # (https://github.com/ufoym/imbalanced-dataset-sampler)
 from utils import constants
@@ -73,7 +79,8 @@ def train_with_configs(config, args: argparse.Namespace,
         model_parameters = filter(
             lambda p: p.requires_grad, model.parameters())
         params = sum([np.prod(p.size()) for p in model_parameters])
-        print(f'{params} trainable parameters', flush=True)
+        if args.verbose:
+            print(f'{params} trainable parameters', flush=True)
         initialized_parameters = copy.deepcopy(model.state_dict())
 
         # Put model on GPU
@@ -151,7 +158,7 @@ def train_with_configs(config, args: argparse.Namespace,
                 model.load_state_dict(
                     copy.deepcopy(initialized_parameters))
                 fold_results, model = train(
-                    args.subject, args,
+                    args.subject, args, config,
                     train_loader, valid_loader, test_loader,
                     optimizer, criterion, model, device, exp_dir,
                     checkpoint_suffix=checkpoint_suffix)
@@ -179,20 +186,33 @@ def train_with_configs(config, args: argparse.Namespace,
     cv_results.to_csv(os.path.join(tune.get_trial_dir(), 'trial_results.csv'),
                       index=False)
 
-    # Compute trial results across cross-validation folds and send to Ray Tune
-    trial_results = cv_results.mean().drop(labels=['cv_fold']).to_dict()
-    trial_results['subject_id'] = args.subject
-    trial_results['C'] = args.num_features
+    # Compute trial results across cross-validation folds to send to Ray Tune
+    grad_norm = cv_results['grad_norm'].apply(pd.Series).mean().tolist()
+    train_losses = cv_results['train_losses'].apply(pd.Series).mean().tolist()
+    train_acc = cv_results['train_acc'].apply(pd.Series).mean().tolist()
+    valid_losses = cv_results['valid_losses'].apply(pd.Series).mean().tolist()
+    valid_acc = cv_results['valid_acc'].apply(pd.Series).mean().tolist()
 
     # Report result (same as tune.report)
-    return trial_results
+    for epoch in range(args.epochs):
+        epoch_results = dict()
+        epoch_results['subject_id'] = args.subject
+        epoch_results['timesteps_total'] = epoch
+        epoch_results['C'] = args.num_features
+        epoch_results['grad_norm'] = grad_norm[i]
+        epoch_results['train_loss'] = train_losses[i]
+        epoch_results['train_accuracy'] = train_acc[i]
+        epoch_results['valid_loss'] = valid_losses[i]
+        epoch_results['valid_accuracy'] = valid_acc[i]
+
+        tune.report(**epoch_results)
 
 
-def train(subject: str, args: argparse.Namespace, train_loader: DataLoader,
-          valid_loader: DataLoader, test_loader: DataLoader,
-          optimizer: torch.optim, criterion: torch.nn.Module,
-          model: torch.nn.Module, device, exp_dir: str,
-          checkpoint_suffix: str = ''):
+def train(subject: str, args: argparse.Namespace, config: dict,
+          train_loader: DataLoader, valid_loader: DataLoader,
+          test_loader: DataLoader, optimizer: torch.optim,
+          criterion: torch.nn.Module, model: torch.nn.Module,
+          device, exp_dir: str, checkpoint_suffix: str = ''):
     """
     Performs one iteration of training for the specified number of epochs
     (with early stopping if used).
@@ -212,6 +232,8 @@ def train(subject: str, args: argparse.Namespace, train_loader: DataLoader,
     valid_loss = list()
     valid_acc = list()
 
+    best_model = copy.deepcopy(model.state_dict())
+    best_model_epoch = 0
     best_epoch_results = dict()
     best_valid_metrics = dict()
     best_valid_metrics['loss'] = -1
@@ -249,8 +271,7 @@ def train(subject: str, args: argparse.Namespace, train_loader: DataLoader,
 
             model.zero_grad()
             optimizer.zero_grad()
-            outputs = model(data)
-            outputs = outputs.squeeze(-1)
+            outputs = model(data).squeeze(-1)
             probabilities = torch.sigmoid(outputs)
             predicted = probabilities > 0.5
             loss = criterion(outputs, labels)
@@ -315,8 +336,6 @@ def train(subject: str, args: argparse.Namespace, train_loader: DataLoader,
                 pred_valid.extend(predicted.data.tolist())
                 true_valid.extend(labels.data.tolist())
 
-                running_loss_valid += loss.item()
-
                 # Keep track of performance metrics (loss is mean-reduced)
                 running_loss_valid += loss.item() * data.size(0)
                 running_corrects_valid += torch.sum(
@@ -340,8 +359,7 @@ def train(subject: str, args: argparse.Namespace, train_loader: DataLoader,
         # Save the best model at each epoch, using validation accuracy or
         # f1-score as the metric
         eps = 0.001
-        if epoch > args.min_epochs and \
-                metrics_valid[args.metric] > best_valid_metric and \
+        if metrics_valid[args.metric] > best_valid_metric and \
                 metrics_valid[args.metric] - best_valid_metric >= eps:
             # Reset early stopping epochs w/o improvement
             epochs_without_improvement = 0
@@ -362,9 +380,13 @@ def train(subject: str, args: argparse.Namespace, train_loader: DataLoader,
                 'pred': pred_valid,
                 'prob': prob_valid
             }
+            # Save best model as a deepcopy
+            best_model = copy.deepcopy(model)
+            best_model_epoch = epoch
         else:
             epochs_without_improvement += 1
-            if epochs_without_improvement >= args.early_stop:
+            if epoch > args.min_epochs and \
+                    epochs_without_improvement >= args.early_stop:
                 fold_results['epoch_early_stop'] = epoch
                 if args.early_stop != -1:
                     if args.verbose:
@@ -383,22 +405,53 @@ def train(subject: str, args: argparse.Namespace, train_loader: DataLoader,
         print('Best valid loss: {:4f}'.format(best_valid_loss), flush=True)
         print(flush=True)
 
-    # Evaluate model on test set
+    # ======== LOAD BEST MODEL ======== #
+    model = SpatiotemporalCNN(
+        C=args.num_features,
+        F1=config['F1'],
+        D=config['D'],
+        F2=config['F2'],
+        p=config['dropout'],
+        fs=config['fs'],
+        T=config['T']
+    )
+    model.load_state_dict(copy.deepcopy(best_model.state_dict()))
+    model.to(device)
+
+    # Evaluate model
+    metrics_train = run_inference(model, device, train_loader, criterion)
+    metrics_valid = run_inference(model, device, valid_loader, criterion)
     metrics_test = run_inference(model, device, test_loader, criterion)
+
+    # Save predictions
+    save_predictions(subject, 'all',
+                     best_epoch_results['train']['true'],
+                     best_epoch_results['train']['pred'],
+                     best_epoch_results['train']['prob'],
+                     exp_dir, 'train', checkpoint_suffix)
+    save_predictions(subject, 'all',
+                     best_epoch_results['valid']['true'],
+                     best_epoch_results['valid']['pred'],
+                     best_epoch_results['valid']['prob'],
+                     exp_dir, 'valid', checkpoint_suffix)
 
     # ======== SUMMARY ======== #
     fold_results['subject_id'] = subject
     fold_results['grad_norm'] = grad_norm
     fold_results['train_losses'] = train_loss
-    fold_results['train_loss'] = train_loss[-1]
-    fold_results['train_accuracy'] = train_acc
+    fold_results['train_acc'] = train_acc
     fold_results['valid_losses'] = valid_loss
-    fold_results['valid_loss'] = valid_loss[-1]
-    fold_results['valid_accuracy'] = valid_acc
+    fold_results['valid_acc'] = valid_acc
+    fold_results['epoch_early_stop'] = best_model_epoch
     # Save metrics of model selected by best validation accuracy
     for metric, value in metrics_train.items():
         fold_results['train_' + metric] = value
     for metric, value in metrics_valid.items():
+        try:
+            assert (value == best_valid_metrics[metric]) or \
+                   (np.isnan(value) and np.isnan(best_valid_metrics[metric]))
+        except AssertionError:
+            print(metric, value, best_valid_metrics[metric])
         fold_results['valid_' + metric] = value
     for metric, value in metrics_test.items():
         fold_results['test_' + metric] = value
@@ -408,9 +461,28 @@ def train(subject: str, args: argparse.Namespace, train_loader: DataLoader,
 
 def main(args: argparse.Namespace, exp_dir: str):
     """
-    Sets up Ray Tune hyperparametere search and saves the best trial result.
+    Sets up Ray Tune hyperparameter search and saves the best trial result.
     """
     # Search algorithm
+    points_to_evaluate = [{
+            'fs': args.fs,
+            'T': args.seq_len,
+            'F1': 8,
+            'D': 8,
+            'F2': 12,
+            'lr': args.lr,
+            'batch_size': args.batch_size,
+            'dropout': args.dropout,
+            'l2': args.weight_decay
+    }]
+    F1_search_space = tune.randint(4, 19)
+    D_search_space = tune.randint(4, 25)
+    F2_search_space = tune.randint(4, 18)
+    lr_search_space = args.lr
+    batch_size_search_space = args.batch_size  # tune.randint(8, 33)
+    dropout_search_space = args.dropout  # tune.uniform(0.4, 0.6)
+    l2_search_space = args.weight_decay  # tune.loguniform(1e-4, 1e-2)
+
     if args.search_algo == 'grid':
         algo = BasicVariantGenerator()
         F1_search_space = tune.grid_search([6, 8, 12])
@@ -421,14 +493,25 @@ def main(args: argparse.Namespace, exp_dir: str):
         dropout_search_space = args.dropout
         l2_search_space = args.weight_decay
     elif args.search_algo == 'bayes_opt':
-        algo = AxSearch(metric='valid_accuracy', mode='max')
-        F1_search_space = tune.qrandint(4, 18, 2)
-        D_search_space = tune.qrandint(4, 24, 2)
-        F2_search_space = tune.qrandint(4, 18, 2)
-        lr_search_space = tune.loguniform(1e-4, 1e-2)
-        batch_size_search_space = tune.qrandint(8, 32, 4)
-        dropout_search_space = tune.uniform(0.4, 0.6)
-        l2_search_space = tune.loguniform(1e-4, 1e-2)
+        algo = AxSearch(
+            metric='valid_accuracy', mode='max',
+            enforce_sequential_optimization=False,
+            points_to_evaluate=points_to_evaluate
+        )
+        algo = ConcurrencyLimiter(algo, max_concurrent=2, batch=True)
+    elif args.search_algo == 'zoopt':
+        algo = ZOOptSearch(
+            budget=args.num_samples, metric='valid_accuracy', mode='max',
+            parallel_num=2
+        )
+        algo = ConcurrencyLimiter(algo, max_concurrent=2, batch=True)
+    elif args.search_algo == 'hyperopt':
+        algo = HyperOptSearch(
+            metric='valid_accuracy', mode='max',
+            points_to_evaluate=points_to_evaluate
+        )
+        algo = ConcurrencyLimiter(algo, max_concurrent=2, batch=True)
+
     # Search space
     config = {
         'fs': args.fs,
@@ -441,6 +524,17 @@ def main(args: argparse.Namespace, exp_dir: str):
         'dropout': dropout_search_space,
         'l2': l2_search_space,
     }
+    # Reported metrics
+    reporter = CLIReporter(
+        metric_columns=['Trial name', 'status', 'D', 'F1', 'F2', 'iter',
+                        'total time (s)', 'ts', 'C', 'train_loss',
+                        'train_accuracy', 'valid_loss', 'valid_accuracy']
+    )
+    # Experiment stopper when trial performance stagnates
+    stopper = ExperimentPlateauAcrossTrialsStopper(
+        metric='valid_accuracy', total_iter=args.epochs, std=0.01, top=10,
+        mode='max', patience=0
+    )
     # Run experiments
     result = tune.run(
         partial(train_with_configs, args=args),
@@ -448,12 +542,15 @@ def main(args: argparse.Namespace, exp_dir: str):
         config=config,
         metric='valid_accuracy',
         mode='max',
+        name=f'{args.search_algo}_search',
         search_alg=algo,
         num_samples=args.num_samples,
         local_dir=exp_dir,
+        progress_reporter=reporter,
         sync_config=tune.SyncConfig(syncer=None),
-        progress_reporter=TrialTerminationReporter(),
-        log_to_file=('my_stdout.log', 'my_stderr.log')
+        log_to_file=('my_stdout.log', 'my_stderr.log'),
+        stop=stopper,
+        fail_fast=True,
     )
 
     # Save the best config and model, load to device for evaluation
@@ -463,25 +560,23 @@ def main(args: argparse.Namespace, exp_dir: str):
         best_trial.last_result['valid_loss']))
     print('Best trial validation accuracy: {}'.format(
         best_trial.last_result['valid_accuracy']))
-    print('Best trial test set accuracy: {}'.format(
-        best_trial.last_result['test_accuracy']))
 
     # Save best configuration
     best_config = result.get_best_config('valid_accuracy', 'max', 'last')
     with open(os.path.join(exp_dir, 'best_config.json'), 'w') as f:
         json.dump(best_config, f, indent=2)
 
-    # Get logging directory for the best trial and read in trial results
+    # Get logging directory for the best trial and copy all trial files
     best_log_dir = result.get_best_logdir('valid_accuracy', 'max', 'last')
-    cv_result = pd.read_csv(os.path.join(best_log_dir, 'trial_results.csv'))
-
-    # Save best trial result to file
-    try:
-        result_df = pd.read_csv(os.path.join(exp_dir, 'trial_results.csv'))
-    except OSError:
-        result_df = pd.DataFrame()
-    result_df = result_df.append(cv_result, ignore_index=True)
-    result_df.to_csv(os.path.join(exp_dir, 'trial_results.csv'), index=False)
+    files = os.listdir(best_log_dir)
+    for fname in files:
+        try:
+            shutil.copy2(os.path.join(best_log_dir, fname), exp_dir)
+        except IsADirectoryError:
+            os.makedirs(os.path.join(exp_dir, fname), exist_ok=True)
+            for f in os.listdir(os.path.join(best_log_dir, fname)):
+                shutil.copy2(os.path.join(best_log_dir, fname, f),
+                             os.path.join(exp_dir, fname))
 
 
 if __name__ == '__main__':
@@ -503,7 +598,7 @@ if __name__ == '__main__':
                         help='evaluate a single subject (must be in '
                         'bci_subjects_{args.expt_type} from constants.py)')
     parser.add_argument('--train_submontages', nargs='+',
-                        default=['a', 'b', 'c'],
+                        default=['a', 'b', 'c', 'abc'],
                         help='specify sub-montages include in dataset.')
     parser.add_argument('--classification_task', type=str, default='motor_LR',
                         choices=['motor_LR', 'motor_color'],
@@ -515,7 +610,7 @@ if __name__ == '__main__':
                         choices=['spatiotemporal_cnn'])
     parser.add_argument('--fs', type=int, default=52,
                         help='Sampling frequency of the data')
-    parser.add_argument('--seq_len', type=int, default=40)
+    parser.add_argument('--seq_len', type=int, default=75)
     parser.add_argument('--num_channels', type=int, default=480,
                         help='Number of input channels to the model')
     parser.add_argument('--num_temporal_filters', type=int, default=12,
@@ -579,8 +674,8 @@ if __name__ == '__main__':
                         help='Performs hyperparameter tuning via the Ray Tune '
                         'library instead of using the specified '
                         'hyperparameters from args.')
-    parser.add_argument('--search_algo', type=str, default='bayes_opt',
-                        choices=['grid', 'bayes_opt'])
+    parser.add_argument('--search_algo', type=str, default='hyperopt',
+                        choices=['grid', 'bayes_opt', 'zoopt', 'hyperopt'])
     parser.add_argument('--num_samples', type=int, default=30)
     parser.add_argument('--gpus_per_trial', type=float, default=0.5)
 
@@ -589,6 +684,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     args.stratified = not args.no_stratified
+    if args.hyperparameter_tune:
+        assert args.early_stop == -1 and args.min_epochs == 0
 
     # Make experimental directories for output
     if args.expt_type == 'mot':
@@ -602,9 +699,15 @@ if __name__ == '__main__':
         args.expt_name, f's_{args.subject}'
     )
     os.makedirs(exp_dir, exist_ok=True)
+    os.makedirs(os.path.join(exp_dir, 'predictions'), exist_ok=True)
 
     # Assign montage list based on the desired number of montages
-    assert set(args.train_submontages).issubset(set(constants.SUBMONTAGES))
+    if args.input_space == 'channel_space':
+        assert set(args.train_submontages).issubset(set(constants.SUBMONTAGES))
+    elif args.input_space == 'voxel_space':
+        assert (
+            args.train_submontages[0] == 'abc' or
+            set(args.train_submontages).issubset(set(constants.SUBMONTAGES)))
 
     t0 = time.time()
     main(args, exp_dir)
