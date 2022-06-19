@@ -124,7 +124,7 @@ def train_with_configs(config, args: argparse.Namespace,
                     checkpoint_suffix = str(j)
                 # No cross-validation
                 else:
-                    checkpoint_suffix = ''
+                    checkpoint_suffix = str(j)
 
                 # Initialize optimizer
                 if args.optimizer == 'Adam':
@@ -173,6 +173,23 @@ def train_with_configs(config, args: argparse.Namespace,
                     torch.save(
                         (model.state_dict(), optimizer.state_dict()), path)
 
+                # Save model predictions
+                trial_dir = tune.get_trial_dir()
+                os.makedirs(os.path.join(trial_dir, 'predictions'),
+                            exist_ok=True)
+                save_predictions(
+                    args.subject, 'all',
+                    fold_results['fetches']['train']['true'],
+                    fold_results['fetches']['train']['pred'],
+                    fold_results['fetches']['train']['prob'],
+                    trial_dir, 'train', checkpoint_suffix)
+                save_predictions(
+                    args.subject, 'all',
+                    fold_results['fetches']['valid']['true'],
+                    fold_results['fetches']['valid']['pred'],
+                    fold_results['fetches']['valid']['prob'],
+                    trial_dir, 'valid', checkpoint_suffix)
+
         del model
 
     except Exception as e:
@@ -183,7 +200,7 @@ def train_with_configs(config, args: argparse.Namespace,
         raise e
 
     # Save cross-validation results to .csv
-    cv_results.to_csv(os.path.join(tune.get_trial_dir(), 'trial_results.csv'),
+    cv_results.to_csv(os.path.join(trial_dir, 'trial_results.csv'),
                       index=False)
 
     # Compute trial results across cross-validation folds to send to Ray Tune
@@ -423,18 +440,6 @@ def train(subject: str, args: argparse.Namespace, config: dict,
     metrics_valid = run_inference(model, device, valid_loader, criterion)
     metrics_test = run_inference(model, device, test_loader, criterion)
 
-    # Save predictions
-    save_predictions(subject, 'all',
-                     best_epoch_results['train']['true'],
-                     best_epoch_results['train']['pred'],
-                     best_epoch_results['train']['prob'],
-                     exp_dir, 'train', checkpoint_suffix)
-    save_predictions(subject, 'all',
-                     best_epoch_results['valid']['true'],
-                     best_epoch_results['valid']['pred'],
-                     best_epoch_results['valid']['prob'],
-                     exp_dir, 'valid', checkpoint_suffix)
-
     # ======== SUMMARY ======== #
     fold_results['subject_id'] = subject
     fold_results['grad_norm'] = grad_norm
@@ -455,6 +460,8 @@ def train(subject: str, args: argparse.Namespace, config: dict,
         fold_results['valid_' + metric] = value
     for metric, value in metrics_test.items():
         fold_results['test_' + metric] = value
+    # Save fetches from model
+    fold_results['fetches'] = best_epoch_results
 
     return fold_results, model
 
@@ -484,7 +491,7 @@ def main(args: argparse.Namespace, exp_dir: str):
     l2_search_space = args.weight_decay  # tune.loguniform(1e-4, 1e-2)
 
     if args.search_algo == 'grid':
-        algo = BasicVariantGenerator()
+        algo = BasicVariantGenerator(random_state=0)
         F1_search_space = tune.grid_search([6, 8, 12])
         D_search_space = tune.grid_search([6, 8, 12])
         F2_search_space = tune.grid_search([6, 8, 12])
@@ -508,7 +515,7 @@ def main(args: argparse.Namespace, exp_dir: str):
     elif args.search_algo == 'hyperopt':
         algo = HyperOptSearch(
             metric='valid_accuracy', mode='max',
-            points_to_evaluate=points_to_evaluate
+            points_to_evaluate=points_to_evaluate, random_state_seed=0
         )
         algo = ConcurrencyLimiter(algo, max_concurrent=2, batch=True)
 
@@ -532,7 +539,7 @@ def main(args: argparse.Namespace, exp_dir: str):
     )
     # Experiment stopper when trial performance stagnates
     stopper = ExperimentPlateauAcrossTrialsStopper(
-        metric='valid_accuracy', total_iter=args.epochs, std=0.01, top=10,
+        metric='valid_accuracy', total_iter=args.epochs, std=0.005, top=20,
         mode='max', patience=0
     )
     # Run experiments
