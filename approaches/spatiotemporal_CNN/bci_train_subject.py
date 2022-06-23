@@ -203,26 +203,8 @@ def train_with_configs(config, args: argparse.Namespace,
     cv_results.to_csv(os.path.join(trial_dir, 'trial_results.csv'),
                       index=False)
 
-    # Compute trial results across cross-validation folds to send to Ray Tune
-    grad_norm = cv_results['grad_norm'].apply(pd.Series).mean().tolist()
-    train_losses = cv_results['train_losses'].apply(pd.Series).mean().tolist()
-    train_acc = cv_results['train_acc'].apply(pd.Series).mean().tolist()
-    valid_losses = cv_results['valid_losses'].apply(pd.Series).mean().tolist()
-    valid_acc = cv_results['valid_acc'].apply(pd.Series).mean().tolist()
-
-    # Report result (same as tune.report)
-    for epoch in range(args.epochs):
-        epoch_results = dict()
-        epoch_results['subject_id'] = args.subject
-        epoch_results['timesteps_total'] = epoch
-        epoch_results['C'] = args.num_features
-        epoch_results['grad_norm'] = grad_norm[i]
-        epoch_results['train_loss'] = train_losses[i]
-        epoch_results['train_accuracy'] = train_acc[i]
-        epoch_results['valid_loss'] = valid_losses[i]
-        epoch_results['valid_accuracy'] = valid_acc[i]
-
-        tune.report(**epoch_results)
+    # Report result
+    tune.report(**cv_results.mean().to_dict())
 
 
 def train(subject: str, args: argparse.Namespace, config: dict,
