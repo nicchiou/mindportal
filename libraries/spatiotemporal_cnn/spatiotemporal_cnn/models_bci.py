@@ -197,21 +197,21 @@ class FCN(nn.Module):
         x = x.type(torch.cuda.FloatTensor)
 
         # Spatiotemporal filtering
-        x = x.unsqueeze(1)                          # (1, C, T)
-        x = self.bn1(self.conv1(x))                 # (F1, C, T)
-        x = self.bn2(self.conv2(x))                 # (D * F1, C - S + 1, T)
+        x = x.unsqueeze(1)                          # (B, 1, C, T)
+        x = self.bn1(self.conv1(x))                 # (B, F1, C, T)
+        x = self.bn2(self.conv2(x))                 # (B, D * F1, C - S + 1, T)
         x = F.max_pool2d(
-            x, kernel_size=(x.size(2), 1))          # (D * F1, 1, T)
-        x = self.dropout(F.elu(x))                  # (D * F1, 1, T)
+            x, kernel_size=(x.size(2), 1))          # (B, D * F1, 1, T)
+        x = self.dropout(F.elu(x))                  # (B, D * F1, 1, T)
 
         # Combine filters with separable convolution
-        x = self.bn3(self.conv3(x))                 # (F2, 1, T)
-        x = self.dropout(self.avgpool(F.elu(x)))    # (F2, 1, T // 8)
+        x = self.bn3(self.conv3(x))                 # (B, F2, 1, T)
+        x = self.dropout(self.avgpool(F.elu(x)))    # (B, F2, 1, T // 8)
 
         # Pointwise convolutions
-        x = self.bn4(self.conv4(x))                 # (1, 1, T // 8)
-        x = self.maxpool(x)                         # (1, 1, 1)
-        x = x.squeeze(-1).squeeze(-1)
+        x = self.bn4(self.conv4(x))                 # (B, 1, 1, T // 8)
+        x = self.maxpool(x)                         # (B, 1, 1, 1)
+        x = x.squeeze(-1).squeeze(-1)               # (B, 1)
 
         return x
 
