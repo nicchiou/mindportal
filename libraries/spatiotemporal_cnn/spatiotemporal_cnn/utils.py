@@ -3,6 +3,7 @@ import os
 import random
 
 import numpy as np
+import pandas as pd
 import torch
 from sklearn import metrics
 
@@ -50,7 +51,7 @@ def run_inference(model, device, data_loader, criterion):
                 else [i.to(device) for i in data]
             labels = labels.to(device)
 
-            outputs = model(data).squeeze()
+            outputs = model(data).squeeze(-1)
             probabilities = torch.sigmoid(outputs)
             predicted = probabilities > 0.5
             loss = criterion(outputs, labels)
@@ -103,3 +104,30 @@ def evaluate(true, pred, prob):
         pass
 
     return eval_metrics
+
+
+def save_predictions(subject_id: str, montage: str,
+                     true: list, pred: list, prob: list,
+                     exp_dir: str, subset: str, checkpoint_suffix: str = '',
+                     final: bool = False):
+    """
+    Writes a DataFrame containing the predictions for a given cross-validation
+    iteration, along with the true labels and probabilities (confidence).
+    """
+
+    result_df = pd.DataFrame(
+        columns=['subject_id', 'montage', 'cv_iter', 'true', 'pred', 'prob'])
+    cv_iter = int(checkpoint_suffix) \
+        if checkpoint_suffix.isdigit() else checkpoint_suffix
+
+    result_df['true'] = true
+    result_df['pred'] = pred
+    result_df['prob'] = prob
+    result_df.loc[:, 'subject_id'] = subject_id
+    result_df.loc[:, 'montage'] = montage
+    result_df.loc[:, 'cv_iter'] = cv_iter
+
+    result_df.to_parquet(os.path.join(
+        exp_dir, 'predictions' if not final else 'final_predictions',
+        f'{subject_id}_{montage}_{subset}_{checkpoint_suffix}.parquet'),
+        index=False)
