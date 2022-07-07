@@ -174,8 +174,8 @@ class SingleSubjectData(BCIData):
     """
     def __init__(self, data_dir: str, subject_id: str, train_submontages: list,
                  classification_task: str, expt_type: str,
-                 filter_zeros: bool = False, input_space: str = 'voxel_space',
-                 data_type: str = 'ph'):
+                 response_speed: str = None, filter_zeros: bool = False,
+                 input_space: str = 'voxel_space', data_type: str = 'ph'):
 
         self.data_dir = data_dir
         self.data = pd.DataFrame()
@@ -212,6 +212,14 @@ class SingleSubjectData(BCIData):
 
         # Remove duplicate columns (i.e. trial_num, subject_id, etc.)
         self.data = self.data.loc[:, ~self.data.columns.duplicated()]
+
+        # Filter relevant trials based on response time
+        if response_speed is not None:
+            orig_num_trials = len(self.data)
+            # Only use slow response trials
+            if response_speed == 'slow':
+                self.data = self.data[self.data['slow_response'] == 1]
+            assert len(self.data) < orig_num_trials
 
         # Separate DataFrame into metadata and dynamic phase data
         meta_cols = ['trial_num', 'subject_id', 'montage']

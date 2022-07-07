@@ -80,8 +80,10 @@ if __name__ == '__main__':
 
             # Parse events and trial types for each of the trials
             # Shape is (num_trials, 2), type: pd.DataFrame
-            events = pd.DataFrame(pc['trial_data'][0][0][0],
-                                  columns=['event', 'trial_type'])
+            events = pd.DataFrame(pc['trial_data'][0][0][4],
+                                  columns=[
+                'event', 'trial_type', 'response_time', 'slow_response'
+                ])
 
             if args.input_space == 'channel_space':
                 # Parse recording channel-space data
@@ -124,6 +126,10 @@ if __name__ == '__main__':
                     dc_signals.loc[:, 'event'] = events.loc[:, 'event']
                     dc_signals.loc[:, 'trial_type'] = \
                         events.loc[trial, 'trial_type']
+                    dc_signals.loc[:, 'response_time'] = \
+                        events.loc[trial, 'response_time']
+                    dc_signals.loc[:, 'slow_response'] = \
+                        events.loc[trial, 'slow_response']
                     all_dc_signals = all_dc_signals.append(
                         dc_signals, ignore_index=True)
 
@@ -138,6 +144,10 @@ if __name__ == '__main__':
                     ac_signals.loc[:, 'event'] = events.loc[:, 'event']
                     ac_signals.loc[:, 'trial_type'] = \
                         events.loc[trial, 'trial_type']
+                    ac_signals.loc[:, 'response_time'] = \
+                        events.loc[trial, 'response_time']
+                    ac_signals.loc[:, 'slow_response'] = \
+                        events.loc[trial, 'slow_response']
                     all_ac_signals = all_ac_signals.append(
                         ac_signals, ignore_index=True)
 
@@ -152,6 +162,10 @@ if __name__ == '__main__':
                     ph_signals.loc[:, 'event'] = events.loc[:, 'event']
                     ph_signals.loc[:, 'trial_type'] = \
                         events.loc[trial, 'trial_type']
+                    ph_signals.loc[:, 'response_time'] = \
+                        events.loc[trial, 'response_time']
+                    ph_signals.loc[:, 'slow_response'] = \
+                        events.loc[trial, 'slow_response']
                     all_ph_signals = all_ph_signals.append(
                         ph_signals, ignore_index=True)
 
@@ -171,6 +185,10 @@ if __name__ == '__main__':
                 all_trials.loc[:, 'freq_band'] = freq_band
                 all_trials.loc[:, 'event'] = events.loc[:, 'event']
                 all_trials.loc[:, 'trial_type'] = events.loc[:, 'trial_type']
+                all_trials.loc[:, 'response_time'] = \
+                    events.loc[trial, 'response_time']
+                all_trials.loc[:, 'slow_response'] = \
+                    events.loc[trial, 'slow_response']
                 for key in boxy_hdr.keys():
                     if key != 'record':
                         all_trials.loc[:, key] = boxy_hdr[key]
@@ -276,6 +294,10 @@ if __name__ == '__main__':
                     dc_signals.loc[:, 'event'] = events.loc[:, 'event']
                     dc_signals.loc[:, 'trial_type'] = \
                         events.loc[trial, 'trial_type']
+                    dc_signals.loc[:, 'response_time'] = \
+                        events.loc[trial, 'response_time']
+                    dc_signals.loc[:, 'slow_response'] = \
+                        events.loc[trial, 'slow_response']
                     all_dc_signals = all_dc_signals.append(
                         dc_signals, ignore_index=True)
 
@@ -293,6 +315,10 @@ if __name__ == '__main__':
                     ac_signals.loc[:, 'event'] = events.loc[:, 'event']
                     ac_signals.loc[:, 'trial_type'] = \
                         events.loc[trial, 'trial_type']
+                    ac_signals.loc[:, 'response_time'] = \
+                        events.loc[trial, 'response_time']
+                    ac_signals.loc[:, 'slow_response'] = \
+                        events.loc[trial, 'slow_response']
                     all_ac_signals = all_ac_signals.append(
                         ac_signals, ignore_index=True)
 
@@ -310,6 +336,10 @@ if __name__ == '__main__':
                     ph_signals.loc[:, 'event'] = events.loc[:, 'event']
                     ph_signals.loc[:, 'trial_type'] = \
                         events.loc[trial, 'trial_type']
+                    ph_signals.loc[:, 'response_time'] = \
+                        events.loc[trial, 'response_time']
+                    ph_signals.loc[:, 'slow_response'] = \
+                        events.loc[trial, 'slow_response']
                     all_ph_signals = all_ph_signals.append(
                         ph_signals, ignore_index=True)
 
@@ -335,6 +365,10 @@ if __name__ == '__main__':
                 all_trials.loc[:, 'freq_band'] = freq_band
                 all_trials.loc[:, 'event'] = events.loc[:, 'event']
                 all_trials.loc[:, 'trial_type'] = events.loc[:, 'trial_type']
+                all_trials.loc[:, 'response_time'] = \
+                    events.loc[trial, 'response_time']
+                all_trials.loc[:, 'slow_response'] = \
+                    events.loc[trial, 'slow_response']
                 for key in boxy_hdr.keys():
                     if key != 'record':
                         all_trials.loc[:, key] = boxy_hdr[key]

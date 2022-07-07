@@ -51,6 +51,7 @@ def train_with_configs(config, args: argparse.Namespace,
             train_submontages=args.train_submontages,
             classification_task=args.classification_task,
             expt_type=args.expt_type,
+            response_speed=args.response_speed,
             filter_zeros=args.filter_zeros,
             input_space=args.input_space,
             data_type=args.data_type
@@ -593,6 +594,8 @@ if __name__ == '__main__':
                         choices=['motor_LR', 'motor_color'],
                         help='options include motor_LR (motor response), '
                         'motor_color (motor response + stimulus color.')
+    parser.add_argument('--response_speed', type=str, default=None,
+                        choices=['slow', 'fast'])
 
     # Model architecture
     parser.add_argument('--arch', type=str, default='spatiotemporal_cnn',
