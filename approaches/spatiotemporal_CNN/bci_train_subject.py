@@ -54,7 +54,9 @@ def train_with_configs(config, args: argparse.Namespace,
             response_speed=args.response_speed,
             filter_zeros=args.filter_zeros,
             input_space=args.input_space,
-            data_type=args.data_type
+            data_type=args.data_type,
+            seq_start=args.seq_start,
+            seq_end=args.seq_end
         )
 
         # Get number of available features
@@ -603,6 +605,8 @@ if __name__ == '__main__':
     parser.add_argument('--fs', type=int, default=52,
                         help='Sampling frequency of the data')
     parser.add_argument('--seq_len', type=int, default=75)
+    parser.add_argument('--seq_start', type=int, default=25)
+    parser.add_argument('--seq_end', type=int, default=None)
     parser.add_argument('--num_channels', type=int, default=480,
                         help='Number of input channels to the model')
     parser.add_argument('--num_temporal_filters', type=int, default=12,

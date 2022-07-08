@@ -175,11 +175,14 @@ class SingleSubjectData(BCIData):
     def __init__(self, data_dir: str, subject_id: str, train_submontages: list,
                  classification_task: str, expt_type: str,
                  response_speed: str = None, filter_zeros: bool = False,
-                 input_space: str = 'voxel_space', data_type: str = 'ph'):
+                 input_space: str = 'voxel_space', data_type: str = 'ph',
+                 seq_start: int = 0, seq_end: int = None):
 
         self.data_dir = data_dir
         self.data = pd.DataFrame()
         self.data_type_prefix = f'{data_type}_'
+        self.seq_start = seq_start
+        self.seq_end = seq_end
 
         # Make assertions about the montage list matching the number of
         # montages
@@ -317,11 +320,14 @@ class SubjectSubmontageData(BCIData):
     def __init__(self, data_dir: str, subject_id: str, submontage: str,
                  classification_task: str, expt_type: str,
                  filter_zeros: bool = False, input_space: str = 'voxel_space',
-                 data_type: str = 'ph'):
+                 data_type: str = 'ph',
+                 seq_start: int = 0, seq_end: int = None):
 
         self.data_dir = data_dir
         self.data = pd.DataFrame()
         self.data_type_prefix = f'{data_type}_'
+        self.seq_start = seq_start
+        self.seq_end = seq_end
 
         # Pandas DataFrame has format: timestep across trial numbers
         # (index), all possible channels + metadata (columns)
@@ -455,6 +461,9 @@ class SubjectMontageDataset(Dataset):
         self.chan_cols = [c for c in self.dynamic_table.columns
                           if self.data_type_prefix in c]
         self.idxs = self.data.idxs
+
+        self.seq_start = self.data.seq_start
+        self.seq_end = self.data.seq_end
 
         pd.set_option('mode.chained_assignment', 'raise')
 
@@ -599,7 +608,7 @@ class SubjectMontageDataset(Dataset):
         # Stores the dynamic data in a (N, C, T) tensor
         self.dynamic_data = np.empty((
             len(self.trial_id), len(self.chan_cols),
-            self.dynamic_table.shape[0] // len(self.trial_id)))
+            self.seq_end - self.seq_start))
 
         for idx, trial in enumerate(self.trial_id):
             dynamic_trial_data = self.dynamic_table.loc[
@@ -608,6 +617,8 @@ class SubjectMontageDataset(Dataset):
                 c for c in dynamic_trial_data.columns
                 if c != 'trial_num' and c != 'idx']
                 ].values.astype(np.float32).T  # data: (C, T)
+            # Slice data to desired sequence start and end
+            data = data[:, self.seq_start:self.seq_end]
             # Maximum absolute value scaling
             if preprocessing['max_abs_scale']:
                 data = maxabs_scale(data)
@@ -667,7 +678,8 @@ class SubjectMontageDataset(Dataset):
         # Stores the dynamic data in a (N, C, T) tensor
         self.dynamic_data = np.empty((
             len(self.trial_id), len(self.chan_cols),
-            self.dynamic_table.shape[0] // len(self.trial_id)))
+            self.seq_end - self.seq_start))
+
         for idx, trial in enumerate(self.trial_id):
             dynamic_trial_data = self.dynamic_table.loc[
                 self.dynamic_table['trial_num'] == trial, :]
@@ -675,6 +687,8 @@ class SubjectMontageDataset(Dataset):
                 c for c in dynamic_trial_data.columns
                 if c != 'trial_num' and c != 'idx']
                 ].values.astype(np.float32).T  # data: (C, T)
+            # Slice data to desired sequence start and end
+            data = data[:, self.seq_start:self.seq_end]
             # Maximum absolute value scaling
             if self.preprocessing['max_abs_scale']:
                 data = maxabs_scale(data)
@@ -721,6 +735,9 @@ class LeaveOneOutSplitSubjectMontageDataset(Dataset):
         self.chan_cols = [c for c in self.dynamic_table.columns
                           if self.data_type_prefix in c]
         self.idxs = self.data.idxs
+
+        self.seq_start = self.data.seq_start
+        self.seq_end = self.data.seq_end
 
         self.test_labels = self.test_data.labels
         self.test_trial_id = self.test_data.trial_id
@@ -866,7 +883,7 @@ class LeaveOneOutSplitSubjectMontageDataset(Dataset):
         # Stores the dynamic data in a (N, C, T) tensor
         self.dynamic_data = np.empty((
             len(self.trial_id), len(self.chan_cols),
-            self.dynamic_table.shape[0] // len(self.trial_id)))
+            self.seq_end - self.seq_start))
 
         for idx, trial in enumerate(self.trial_id):
             dynamic_trial_data = self.dynamic_table.loc[
@@ -875,6 +892,8 @@ class LeaveOneOutSplitSubjectMontageDataset(Dataset):
                 c for c in dynamic_trial_data.columns
                 if c != 'trial_num' and c != 'idx']
                 ].values.astype(np.float32).T  # data: (C, T)
+            # Slice data to desired sequence start and end
+            data = data[:, self.seq_start:self.seq_end]
             # Maximum absolute value scaling
             if preprocessing['max_abs_scale']:
                 data = maxabs_scale(data)
@@ -930,7 +949,8 @@ class LeaveOneOutSplitSubjectMontageDataset(Dataset):
         # Stores the dynamic data in a (N, C, T) tensor
         self.dynamic_data = np.empty((
             len(self.trial_id), len(self.chan_cols),
-            self.dynamic_table.shape[0] // len(self.trial_id)))
+            self.seq_end - self.seq_start))
+
         for idx, trial in enumerate(self.trial_id):
             dynamic_trial_data = self.dynamic_table.loc[
                 self.dynamic_table['trial_num'] == trial, :]
@@ -938,6 +958,8 @@ class LeaveOneOutSplitSubjectMontageDataset(Dataset):
                 c for c in dynamic_trial_data.columns
                 if c != 'trial_num' and c != 'idx']
                 ].values.astype(np.float32).T  # data: (C, T)
+            # Slice data to desired sequence start and end
+            data = data[:, self.seq_start:self.seq_end]
             # Maximum absolute value scaling
             if self.preprocessing['max_abs_scale']:
                 data = maxabs_scale(data)
