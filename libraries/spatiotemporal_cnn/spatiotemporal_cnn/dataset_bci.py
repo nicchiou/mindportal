@@ -27,11 +27,14 @@ class IncludedExcludedSubjectData(BCIData):
                  train_submontages: list,
                  classification_task: str, expt_type: str,
                  filter_zeros: bool = False, input_space: str = 'voxel_space',
-                 data_type: str = 'ph'):
+                 data_type: str = 'ph', hemi: str = None,
+                 seq_start: int = 0, seq_end: int = None):
 
         self.data_dir = data_dir
         self.data = pd.DataFrame()
         self.data_type_prefix = f'{data_type}_'
+        self.seq_start = seq_start
+        self.seq_end = seq_end
 
         # Make assertions about the montages and subjects included for training
         if input_space == 'channel_space':
@@ -92,7 +95,14 @@ class IncludedExcludedSubjectData(BCIData):
             if 'c' in train_submontages:
                 expected_features += 96
         elif input_space == 'voxel_space':
-            expected_features = 2 * 49
+            if hemi == 'L':
+                feat_cols = [c for c in feat_cols if '_L_' in c]
+                expected_features = 49
+            elif hemi == 'R':
+                feat_cols = [c for c in feat_cols if '_R_' in c]
+                expected_features = 49
+            else:
+                expected_features = 2 * 49
         assert len(feat_cols) == expected_features
         self.meta_data = self.data.loc[:, meta_cols]
         self.dynamic_table = self.data.loc[:, feat_cols + ['trial_num']]
@@ -176,7 +186,7 @@ class SingleSubjectData(BCIData):
                  classification_task: str, expt_type: str,
                  response_speed: str = None, filter_zeros: bool = False,
                  input_space: str = 'voxel_space', data_type: str = 'ph',
-                 seq_start: int = 0, seq_end: int = None):
+                 hemi: str = None, seq_start: int = 0, seq_end: int = None):
 
         self.data_dir = data_dir
         self.data = pd.DataFrame()
@@ -237,7 +247,14 @@ class SingleSubjectData(BCIData):
             if 'c' in train_submontages:
                 expected_features += 96
         elif input_space == 'voxel_space':
-            expected_features = 2 * 49
+            if hemi == 'L':
+                feat_cols = [c for c in feat_cols if '_L_' in c]
+                expected_features = 49
+            elif hemi == 'R':
+                feat_cols = [c for c in feat_cols if '_R_' in c]
+                expected_features = 49
+            else:
+                expected_features = 2 * 49
         assert len(feat_cols) == expected_features
         self.meta_data = self.data.loc[:, meta_cols]
         self.dynamic_table = self.data.loc[:, feat_cols + ['trial_num']]
@@ -320,7 +337,7 @@ class SubjectSubmontageData(BCIData):
     def __init__(self, data_dir: str, subject_id: str, submontage: str,
                  classification_task: str, expt_type: str,
                  filter_zeros: bool = False, input_space: str = 'voxel_space',
-                 data_type: str = 'ph',
+                 data_type: str = 'ph', hemi: str = None,
                  seq_start: int = 0, seq_end: int = None):
 
         self.data_dir = data_dir
@@ -351,7 +368,10 @@ class SubjectSubmontageData(BCIData):
             elif submontage == 'c':
                 assert len(feat_cols) == 96
         elif input_space == 'voxel_space':
-            assert len(feat_cols) == 2 * 49
+            if hemi == 'L':
+                feat_cols = [c for c in feat_cols if '_L_' in c]
+            elif hemi == 'R':
+                feat_cols = [c for c in feat_cols if '_R_' in c]
         self.meta_data = self.data.loc[:, meta_cols]
         self.dynamic_table = self.data.loc[:, feat_cols + ['trial_num']]
         # Labels correspond to the trial type of a specific trial number

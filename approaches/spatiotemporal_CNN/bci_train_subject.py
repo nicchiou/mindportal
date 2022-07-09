@@ -55,6 +55,7 @@ def train_with_configs(config, args: argparse.Namespace,
             filter_zeros=args.filter_zeros,
             input_space=args.input_space,
             data_type=args.data_type,
+            hemi=args.hemi,
             seq_start=args.seq_start,
             seq_end=args.seq_end
         )
@@ -607,6 +608,7 @@ if __name__ == '__main__':
     parser.add_argument('--seq_len', type=int, default=75)
     parser.add_argument('--seq_start', type=int, default=25)
     parser.add_argument('--seq_end', type=int, default=None)
+    parser.add_argument('--hemi', type=str, default=None)
     parser.add_argument('--num_channels', type=int, default=480,
                         help='Number of input channels to the model')
     parser.add_argument('--num_temporal_filters', type=int, default=12,
