@@ -474,7 +474,7 @@ def main(args: argparse.Namespace, exp_dir: str):
     lr_search_space = args.lr
     batch_size_search_space = args.batch_size  # tune.randint(8, 33)
     dropout_search_space = args.dropout  # tune.uniform(0.4, 0.6)
-    l2_search_space = args.weight_decay  # tune.loguniform(1e-4, 1e-2)
+    l2_search_space = tune.loguniform(1e-4, 1e-2)
 
     if args.search_algo == 'grid':
         algo = BasicVariantGenerator(random_state=0)
