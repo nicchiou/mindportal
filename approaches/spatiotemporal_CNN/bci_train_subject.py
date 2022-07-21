@@ -474,7 +474,7 @@ def main(args: argparse.Namespace, exp_dir: str):
     lr_search_space = args.lr
     batch_size_search_space = args.batch_size  # tune.randint(8, 33)
     dropout_search_space = args.dropout  # tune.uniform(0.4, 0.6)
-    l2_search_space = args.weight_decay  # tune.loguniform(1e-4, 1e-2)
+    l2_search_space = tune.loguniform(1e-4, 1e-2)
 
     if args.search_algo == 'grid':
         algo = BasicVariantGenerator(random_state=0)
@@ -682,8 +682,6 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     args.stratified = not args.no_stratified
-    if args.hyperparameter_tune:
-        assert args.early_stop == -1 and args.min_epochs == 0
 
     # Make experimental directories for output
     if args.expt_type == 'mot':
